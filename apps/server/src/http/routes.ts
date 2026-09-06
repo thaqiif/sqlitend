@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { rm } from "node:fs/promises";
+import { rm, rmdir } from "node:fs/promises";
 import { ZodError } from "zod";
 import {
   CreateDatabaseSchema,
@@ -288,6 +288,23 @@ export function createRoutes(d: RoutesDeps): Hono {
     await d.supervisor.killByDbId(row.id);
     assertInside(d.config.dataRoot, row.data_dir);
     await rm(row.data_dir, { recursive: true, force: true });
+    // Remove now-empty parent directories (workspaces/<ws>/dbs, then the
+    // workspace dir) — rmdir only deletes empty dirs, so a workspace with
+    // other databases is preserved untouched.
+    {
+      const dataRoot = d.config.dataRoot;
+      const dbsDir = path.dirname(row.data_dir);
+      const wsDir = path.dirname(dbsDir);
+      for (const dir of [dbsDir, wsDir]) {
+        if (path.resolve(dir) === path.resolve(dataRoot)) break;
+        try {
+          await rmdir(dir); // only removes empty dirs; non-empty throws ENOTEMPTY
+        } catch {
+          // ENOTEMPTY (a sibling database or the workspace root) — stop climbing.
+          break;
+        }
+      }
+    }
     // Drop the per-database signing keypair too: keys are derived from the row
     // id, which is never reused (new DBs get fresh UUIDs), so orphaned key
     // files are dead weight. Guarded the same as data_dir.

@@ -290,6 +290,9 @@ describe("delete / tokens / metrics routes", () => {
     expect(ok.status).toBe(204);
     expect(databases.getById(d.id)).toBeNull();
     expect(existsSync(dataDir)).toBe(false);
+    // Now-empty parents (dbs/, then the workspace dir) are cleaned up too.
+    expect(existsSync(path.dirname(dataDir))).toBe(false);
+    expect(existsSync(path.dirname(path.dirname(dataDir)))).toBe(false);
 
     const missing = await send(app, "DELETE", `/api/databases/${uid()}`, {});
     expect(missing.status).toBe(404);
@@ -300,6 +303,27 @@ describe("delete / tokens / metrics routes", () => {
     expect(revoke.status).toBe(501);
     const revokeBody = (await revoke.json()) as { error: { code: string } };
     expect(revokeBody.error.code).toBe("revocation_unsupported");
+  });
+
+  test("DELETE keeps parent dirs when a sibling database still exists", async () => {
+    const app = makeApp();
+    const ws = workspaces.create(wsRow("ws-sib"));
+    const dbsDir = path.join(dir, "workspaces", "ws-sib", "dbs");
+    const keepDir = path.join(dbsDir, "keep");
+    const goneDir = path.join(dbsDir, "gone");
+    mkdirSync(keepDir, { recursive: true });
+    mkdirSync(goneDir, { recursive: true });
+    const keep = databases.create(dbRow(ws.id, { slug: "keep", status: "running", data_dir: keepDir }));
+    const gone = databases.create(dbRow(ws.id, { slug: "gone", status: "running", data_dir: goneDir }));
+
+    const res = await send(app, "DELETE", `/api/databases/${gone.id}`, {});
+    expect(res.status).toBe(204);
+    expect(existsSync(goneDir)).toBe(false);
+    // The dbs/ and workspace dirs survive because `keep` still lives there.
+    expect(existsSync(dbsDir)).toBe(true);
+    expect(existsSync(path.dirname(dbsDir))).toBe(true);
+    expect(existsSync(path.join(keepDir, "db.sqlite"))).toBe(false); // just the dir
+    expect(databases.getById(keep.id)).not.toBeNull();
   });
 
   // One corrupt metadata row must never take the whole list (or metrics) down:
