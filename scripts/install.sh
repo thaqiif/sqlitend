@@ -46,10 +46,11 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 case "$OS-$ARCH" in
   Linux-x86_64)  PLATFORM="linux-x86_64"  ;;
+  Linux-aarch64) PLATFORM="linux-aarch64" ;;
   Darwin-arm64)  PLATFORM="macos (arm64)" ;;
   Darwin-x86_64) PLATFORM="macos (x64)"   ;;
   *)
-    die "unsupported platform $OS $ARCH — sqlitend supports linux-x86_64 and macOS arm64/x64"
+    die "unsupported platform $OS $ARCH — sqlitend supports linux x86_64/aarch64 and macOS arm64/x64"
     ;;
 esac
 log "platform: $PLATFORM"

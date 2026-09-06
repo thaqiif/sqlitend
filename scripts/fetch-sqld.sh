@@ -28,6 +28,8 @@ VERSION="${VERSION#v}"
 
 # Pinned SHA-256 of the extracted `sqld` BINARY per release artifact.
 PINNED_BIN_SHA256_x86_64_unknown_linux_gnu="0863c3fbe68ac9714bca2cec1330def7a0ba5e4a29f199bf60ef46fa0c95b895"
+# linux aarch64 (GNU libc) — added 2026-09-06, runner arch
+PINNED_BIN_SHA256_aarch64_unknown_linux_gnu="54039931c1088483706790e6cf73444ad88b843a9bb0ca8285b82fc309ad4810"
 PINNED_BIN_SHA256_aarch64_apple_darwin="cc075b5bf145e5e750afd2941f390b46dbfe9ae47158d95ab637a00559681054"
 PINNED_BIN_SHA256_x86_64_apple_darwin="f831a1050a68e2342ce715283b6367382bd02e143ed85d7879c2b6f64485812c"
 
@@ -37,12 +39,13 @@ BIN_DIR="$ROOT/bin"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 case "$OS-$ARCH" in
-  Linux-x86_64)  TARGET="x86_64-unknown-linux-gnu";  PINNED="$PINNED_BIN_SHA256_x86_64_unknown_linux_gnu" ;;
+  Linux-x86_64)  TARGET="x86_64-unknown-linux-gnu";   PINNED="$PINNED_BIN_SHA256_x86_64_unknown_linux_gnu" ;;
+  Linux-aarch64) TARGET="aarch64-unknown-linux-gnu"; PINNED="$PINNED_BIN_SHA256_aarch64_unknown_linux_gnu" ;;
   Darwin-arm64)  TARGET="aarch64-apple-darwin";      PINNED="$PINNED_BIN_SHA256_aarch64_apple_darwin" ;;
   Darwin-x86_64) TARGET="x86_64-apple-darwin";       PINNED="$PINNED_BIN_SHA256_x86_64_apple_darwin" ;;
   *)
     echo "Unsupported platform: $OS $ARCH" >&2
-    echo "Only linux-x86_64 (and macOS aarch64/x64) are supported by fetch-sqld.sh." >&2
+    echo "Only linux x86_64/aarch64 (and macOS aarch64/x64) are supported by fetch-sqld.sh." >&2
     echo "Fallback: cargo install libsql-server --bin sqld, then set SQLITEND_SQLD_PATH." >&2
     exit 1
     ;;
