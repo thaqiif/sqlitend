@@ -138,6 +138,7 @@ export function App() {
           onOpenDatabase={(id) => setView({ name: "detail", databaseId: id })}
           onCreateWorkspace={handleCreateWorkspace}
           onDeleteWorkspace={handleDeleteWorkspace}
+          publicHost={systemInfo?.publicHost}
         />
       )}
     </div>

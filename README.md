@@ -65,6 +65,7 @@ All settings via environment variables (see [`.env.example`](.env.example)):
 
 - `SQLITEND_PORT` – control plane listener port (default `6100`)
 - `SQLITEND_HOST` – bind address (`0.0.0.0` = all interfaces, the default; `127.0.0.1` = localhost only)
+- `SQLITEND_PUBLIC_HOST` – host advertised in database connection URLs (default: `127.0.0.1`; set to the machine's public address/hostname for remote clients)
 - `SQLITEND_PORT_RANGE` – http+grpc port pair range per DB (default `6101-6300`)
 - `SQLITEND_DATA_ROOT` – data root (`~/.local/share/sqlitend` default)
 - `SQLITEND_SQLD_PATH` – path to the sqld binary (`<repo>/bin/sqld` default)
@@ -77,13 +78,17 @@ All settings via environment variables (see [`.env.example`](.env.example)):
 
 The control plane (web UI + API) binds **`0.0.0.0` by default** — reachable on any interface
 (e.g. `http://<machine-ip>:6100`). Set `SQLITEND_HOST=127.0.0.1` to restrict it to localhost.
+Per-database `sqld` listeners bind the same address, so remote clients can connect to databases
+too — connection URLs advertise `SQLITEND_PUBLIC_HOST` (set it to the machine's address, e.g.
+your Tailscale IP or a DNS name).
 
 The API answers only requests addressed to its listener **by IP or the configured host**; DNS
 hostnames are refused (`403`), which blocks DNS-rebinding attacks. The management surface itself
 has **no login in v1** — anyone who can reach the listener can manage workspaces/databases and
 mint database tokens — so on a public network put it behind a firewall, an authenticated reverse
-proxy, or a Tailscale ACL. The per-database sqld tokens (see [Auth note](#auth-note)) protect
-*data access*, not the control plane.
+proxy, or a Tailscale ACL. Database access itself stays protected by the per-database signing
+keys: connecting to a `sqld` port without that database's token is rejected (see
+[Auth note](#auth-note)).
 
 ## Provisioning
 

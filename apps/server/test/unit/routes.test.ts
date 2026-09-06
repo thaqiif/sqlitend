@@ -69,9 +69,10 @@ function makeApp(over: {
   supervisor?: Supervisor;
   sampler?: Sampler;
   sqldOk?: boolean;
+  publicHost?: string;
 } = {}) {
   return createRoutes({
-    config: loadConfig({}, { dataRoot: dir }),
+    config: loadConfig({}, { dataRoot: dir, ...(over.publicHost ? { publicHost: over.publicHost } : {}) }),
     workspaces,
     databases,
     tokens,
@@ -236,6 +237,25 @@ describe("start / stop routes", () => {
     expect(conn.httpUrl).toBe("http://127.0.0.1:5001");
     expect(conn.hranaUrl).toBe("ws://127.0.0.1:5001");
     expect(conn.grpcUrl).toBe("http://127.0.0.1:5002");
+  });
+
+  test("connection URLs advertise SQLITEND_PUBLIC_HOST when configured", async () => {
+    const app = makeApp({ publicHost: "100.97.250.76" });
+    const d = databases.create(dbRow(ws().id, { port: 7001, grpc_port: 7002, status: "running" }));
+    const res = await send(app, "GET", `/api/databases/${d.id}/connection`);
+    expect(res.status).toBe(200);
+    const conn = (await res.json()) as { httpUrl: string; hranaUrl: string; grpcUrl: string };
+    expect(conn.httpUrl).toBe("http://100.97.250.76:7001");
+    expect(conn.hranaUrl).toBe("ws://100.97.250.76:7001");
+    expect(conn.grpcUrl).toBe("http://100.97.250.76:7002");
+  });
+
+  test("/api/system exposes the advertised publicHost", async () => {
+    const app = makeApp({ publicHost: "203.0.113.7" });
+    const res = await send(app, "GET", "/api/system");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { publicHost: string };
+    expect(body.publicHost).toBe("203.0.113.7");
   });
 
   test("POST /api/databases/:id/start: 409 already_running and 409 deleting and 503 when sqld unavailable", async () => {

@@ -206,10 +206,14 @@ export async function launchSqld(
   assertInside(config.dataRoot, dataDir);
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
+  // sqld binds the same address as the control plane (0.0.0.0 by default), so
+  // databases are reachable wherever the dashboard is. Readiness still probes
+  // loopback — a wildcard listener answers on it too.
+  const listenHost = (config.host === "::" || config.host === "*") ? "0.0.0.0" : config.host;
   const args = [
     "--db-path", path.join(dataDir, "db.sqlite"),
-    "--http-listen-addr", `127.0.0.1:${port}`,
-    "--grpc-listen-addr", `127.0.0.1:${grpcPort}`,
+    "--http-listen-addr", `${listenHost}:${port}`,
+    "--grpc-listen-addr", `${listenHost}:${grpcPort}`,
     "--no-welcome",
   ];
   if (authPubFile && authPubFile.length > 0) {

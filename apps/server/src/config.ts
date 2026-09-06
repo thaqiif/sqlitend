@@ -17,6 +17,11 @@ export interface Config {
   /** Control-plane listener bind address (default 0.0.0.0 — all interfaces). */
   port: number;
   host: string;
+  /** Host advertised in database connection URLs (http/hrana/grpc) to clients.
+   *  Default: 127.0.0.1, or the bind host when it is an explicit address — a
+   *  wildcard bind (0.0.0.0) cannot be advertised, so SQLITEND_PUBLIC_HOST
+   *  should be set to the machine's public address/hostname for remote clients. */
+  publicHost: string;
   /** Range from which http+grpc port PAIRS are allocated per database. */
   portRange: PortRange;
   /** Root directory holding metadata.sqlite and all database data dirs. */
@@ -75,9 +80,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     ? env.SQLITEND_HOST.trim()
     : DEFAULT_HOST;
 
+  // Advertised connection host: explicit SQLITEND_PUBLIC_HOST wins; otherwise
+  // fall back to the bind host when it names a real address (0.0.0.0/:: cannot
+  // be advertised to clients); else the conventional loopback default.
+  const wildcardHost = host === "0.0.0.0" || host === "::" || host === "*";
+  const publicHost = env.SQLITEND_PUBLIC_HOST && env.SQLITEND_PUBLIC_HOST.trim().length > 0
+    ? env.SQLITEND_PUBLIC_HOST.trim()
+    : (wildcardHost ? "127.0.0.1" : host);
+
   return {
     port,
     host,
+    publicHost,
     portRange: env.SQLITEND_PORT_RANGE ? parsePortRange(env.SQLITEND_PORT_RANGE) : DEFAULT_PORT_RANGE,
     dataRoot,
     sqldPath: (env.SQLITEND_SQLD_PATH && env.SQLITEND_SQLD_PATH.length > 0)

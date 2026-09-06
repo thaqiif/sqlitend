@@ -146,6 +146,7 @@ export function createRoutes(d: RoutesDeps): Hono {
       sqldOk: d.sqldOk,
       sqldReason: d.sqldOk ? null : `sqld binary not usable — run scripts/fetch-sqld.sh, then restart`,
       sqldBinarySha256: null,
+      publicHost: d.config.publicHost,
       counts: { workspaces: d.workspaces.count, databases: d.databases.count },
     };
     return c.json(sys);
@@ -306,9 +307,9 @@ export function createRoutes(d: RoutesDeps): Hono {
     const row = requireDb(c.req.param("id"));
     if (!row.port || !row.grpc_port) throw new ApiError(409, "not_ready", "database has no allocated endpoints yet");
     const conn: Connection = {
-      httpUrl: `http://127.0.0.1:${row.port}`,
-      hranaUrl: `ws://127.0.0.1:${row.port}`,
-      grpcUrl: `http://127.0.0.1:${row.grpc_port}`,
+      httpUrl: `http://${d.config.publicHost}:${row.port}`,
+      hranaUrl: `ws://${d.config.publicHost}:${row.port}`,
+      grpcUrl: `http://${d.config.publicHost}:${row.grpc_port}`,
       dbName: row.slug,
     };
     return c.json(conn);

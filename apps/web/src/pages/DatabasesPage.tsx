@@ -15,6 +15,8 @@ interface Props {
   onOpenDatabase: (id: string) => void;
   onCreateWorkspace: (name: string) => Promise<void>;
   onDeleteWorkspace: (id: string) => Promise<void>;
+  /** Host advertised in connection URLs (from /api/system); loopback fallback. */
+  publicHost?: string;
 }
 
 type PendingDelete =
@@ -42,6 +44,7 @@ export function DatabasesPage({
   onOpenDatabase,
   onCreateWorkspace,
   onDeleteWorkspace,
+  publicHost = "127.0.0.1",
 }: Props) {
   const [databases, setDatabases] = useState<Database[]>([]);
   const [metrics, setMetrics] = useState<Record<string, Metrics>>({});
@@ -154,9 +157,9 @@ export function DatabasesPage({
     }
   }
 
-  // The backend binds sqlitend to 127.0.0.1 and exposes 127.0.0.1 URLs; show the
-  // same host on cards so the value always matches what the client will use.
-  const dbHost = (db: Database) => (db.port != null ? `127.0.0.1:${db.port}` : null);
+  // Show the host the API advertises in connection URLs (defaults to loopback
+  // when /api/system hasn't been fetched yet), so cards match what clients use.
+  const dbHost = (db: Database) => (db.port != null ? `${publicHost}:${db.port}` : null);
 
   return (
     <div className="page-layout">

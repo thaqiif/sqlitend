@@ -124,6 +124,8 @@ export const SystemInfoSchema = z.object({
   sqldOk: z.boolean(),
   sqldReason: z.string().nullable(),
   sqldBinarySha256: z.string().nullable(),
+  /** Host advertised in database connection URLs (see config publicHost). */
+  publicHost: z.string(),
   counts: z.object({
     workspaces: z.number().int(),
     databases: z.number().int(),
