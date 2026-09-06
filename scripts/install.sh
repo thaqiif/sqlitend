@@ -56,10 +56,29 @@ esac
 log "platform: $PLATFORM"
 
 # --- Bun ----------------------------------------------------------------------
+# The official bun.sh installer unpacks with `unzip`; bootstrap it when missing.
+install_unzip() {
+  local SU=""
+  if [ "$(id -u)" != "0" ]; then SU="sudo "; fi
+  if   command -v apt-get >/dev/null 2>&1; then ${SU}apt-get update -qq >/dev/null && ${SU}apt-get install -y -qq unzip >/dev/null
+  elif command -v dnf     >/dev/null 2>&1; then ${SU}dnf     install -y -q unzip >/dev/null
+  elif command -v yum     >/dev/null 2>&1; then ${SU}yum     install -y -q unzip >/dev/null
+  elif command -v apk     >/dev/null 2>&1; then ${SU}apk     add --no-cache unzip >/dev/null
+  elif command -v brew    >/dev/null 2>&1; then ${SU}brew    install unzip >/dev/null
+  else
+    die "unzip is required to unpack Bun, but no supported package manager was found. Install unzip, then re-run this script."
+  fi
+  command -v unzip >/dev/null 2>&1 || die "tried to install unzip but it is still unavailable"
+}
+
 ensure_bun() {
   if command -v bun >/dev/null 2>&1; then
     BUN="$(command -v bun)"
     return
+  fi
+  if ! command -v unzip >/dev/null 2>&1; then
+    log "unzip missing — bootstrapping it (Bun's installer needs it) …"
+    install_unzip
   fi
   log "Bun not found — installing to ~/.bun …"
   curl -fsSL https://bun.sh/install | bash
