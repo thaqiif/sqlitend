@@ -1,0 +1,89 @@
+{
+  "captured": "2026-09-06T16:42:00Z",
+  "host": {
+    "cpu": "1 vCPU",
+    "ramMb": 969,
+    "platform": "Linux aarch64 (Debian 13)",
+    "name": "sqlitendtest"
+  },
+  "sqld": "0.24.32 (pinned, SHA-256 verified), per-db process via sqlitend API",
+  "driver": "@libsql/client 0.18.0 over Hrana WebSocket (loopback, minted token)",
+  "sweep": {
+    "note": "write-heavy 30/70 mix, 35s per level, one sqld DB seeded 100k rows",
+    "levels": {
+      "1": {
+        "ops": 78018,
+        "rate": 2229,
+        "p50Ms": 0,
+        "p95Ms": 1,
+        "p99Ms": 3,
+        "retries": 0,
+        "errors": 0
+      },
+      "4": {
+        "ops": 78882,
+        "rate": 2254,
+        "p50Ms": 1,
+        "p95Ms": 6,
+        "p99Ms": 8,
+        "retries": 7,
+        "errors": 0
+      },
+      "8": {
+        "ops": 68790,
+        "rate": 1965,
+        "p50Ms": 2,
+        "p95Ms": 14,
+        "p99Ms": 22,
+        "retries": 27,
+        "errors": 0
+      },
+      "16": {
+        "ops": 47408,
+        "rate": 1354,
+        "p50Ms": 4,
+        "p95Ms": 28,
+        "p99Ms": 80,
+        "retries": 44,
+        "errors": 0
+      }
+    },
+    "finding": "aggregate throughput is flat ~2.2k/s at conc 1-4 on one core, declines past 8, thrashes >=16; p95 climbs with queueing"
+  },
+  "million": {
+    "note": "read-heavy 80/20 mix, fresh DB seeded 100k, conc=4, fixed 1,000,000 ops",
+    "conc": 4,
+    "ops": 1000000,
+    "errors": 0,
+    "retries": 26,
+    "elapsedMs": 666791,
+    "rate": 1500,
+    "p50Ms": 2,
+    "p95Ms": 6,
+    "p99Ms": 11,
+    "maxMs": 269,
+    "mix": {
+      "insert": 120000,
+      "point": 350018,
+      "range": 249919,
+      "update": 79986,
+      "topN": 200077
+    },
+    "hostPeaks": {
+      "usedMb": 357,
+      "load1": 29.85,
+      "sqldRssMb": 42,
+      "endLoad1": 3.28
+    },
+    "secRate": {
+      "min": 870,
+      "max": 1872,
+      "mean": 1500,
+      "points": 665
+    }
+  },
+  "wedgeFinding": {
+    "observed": "a sustained write-heavy run left the benchmark sqld process busy-spinning at 100% CPU with zero clients attached (load ~56 on 1 core). Killed the process; read-heavy run stayed healthy.",
+    "mitigation": "batch writes, connection pooling, monitor per-sqld CPU"
+  }
+}
