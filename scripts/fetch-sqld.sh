@@ -59,7 +59,14 @@ TARBALL="libsql-server-$TARGET.tar.xz"
 URL="https://github.com/$REPO/releases/download/$TAG/$TARBALL"
 DEST="$BIN_DIR/sqld"
 
-hash_file() { shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'; }
+# sha256sum (GNU/coreutils, Debian etc.) vs shasum (macOS, Perl) vs sha256 (BSD).
+if   command -v sha256sum >/dev/null 2>&1; then hash_file() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum    >/dev/null 2>&1; then hash_file() { shasum -a 256 "$1" | awk '{print $1}'; }
+elif command -v sha256    >/dev/null 2>&1; then hash_file() { sha256    "$1" | awk '{print $1}'; }
+else
+  echo "FATAL: no SHA-256 tool (sha256sum/shasum/sha256) found on PATH." >&2
+  exit 1
+fi
 # NOTE: no `grep -q` under `set -o pipefail` — an early-exit grep SIGPIPEs the
 # producer and makes a MATCH look like a failure.
 version_ok() { "$1" --version 2>/dev/null | grep "$VERSION" >/dev/null; }
