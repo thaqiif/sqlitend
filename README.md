@@ -17,6 +17,27 @@ and watch live process-resource metrics.
 
 ## Getting started
 
+**One-line install** (no root, everything under `$HOME`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/thaqiif/sqlitend/main/scripts/install.sh | bash
+```
+
+This installs Bun if missing, downloads the repo, provisions the pinned `sqld` binary
+(SHA-256 verified), builds the web UI, and puts a `sqlitend` launcher in `~/.local/bin`.
+Then:
+
+```sh
+~/.local/bin/sqlitend          # start the control plane (http://127.0.0.1:6100)
+```
+
+Install options (`bash scripts/install.sh` docs for details): `SQLITEND_BRANCH`,
+`SQLITEND_INSTALL_DIR`, `SQLITEND_BIN_DIR`, and `SQLITEND_SYSTEMD=1` (Linux → systemd `--user`
+service). Everything — data, per-DB keys, databases — lives under
+`~/.local/share/sqlitend` (the server data-root default).
+
+**From source** (for development / forking):
+
 ```sh
 # 1. Provision the pinned sqld binary
 ./scripts/fetch-sqld.sh
