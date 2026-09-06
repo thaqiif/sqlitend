@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The One-Gigabyte Test</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
@@ -6,7 +11,7 @@
     --card: #FCFBF7;
     --ink: #1C2622;
     --ink-soft: #49544F;
-    --ink-faint: #6B756F;
+    --ink-faint: #5E6A63;
     --line: #E2DFD5;
     --line-strong: #CBC7BA;
     --petrol: #0E6B5C;
@@ -68,7 +73,7 @@
 
   /* ---------- sections ---------- */
   section { margin-top: 56px; }
-  .shead { display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--line-strong); padding-bottom: 12px; margin-bottom: 22px; }
+  .shead { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; border-bottom: 1px solid var(--line-strong); padding-bottom: 12px; margin-bottom: 22px; }
   .shead .chip {
     font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
     font-weight: 700; font-size: 22px; width: 40px; height: 40px;
@@ -131,8 +136,15 @@
   .foot .cmd { font-family: "IBM Plex Mono", monospace; font-size: 12px; background: var(--card); border: 1px solid var(--line); padding: 10px 14px; overflow-x: auto; max-width: 100%; }
   .foot .meta { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-faint); text-align: right; }
 
-  @media (prefers-reduced-motion: no-preference) { }
+  /* report nav */
+  .rnav { display: flex; align-items: center; gap: 8px; background: var(--ink); padding: 8px 14px; position: sticky; top: 0; z-index: 20; }
+  .rnav a { color: var(--paper); text-decoration: none; font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: .06em; }
+  .rnav a:hover { text-decoration: underline; }
+
 </style>
+</head>
+<body>
+<nav class="rnav"><a href="./index.html">← sqlitend home</a></nav>
 
 <div class="wrap">
 
@@ -163,32 +175,32 @@
     <div class="wsgroup">
       <p class="wstitle">workspace stress-01 &middot; 10 databases &middot; 100,000 rows &middot; 13.8s</p>
       <div class="rack">
-        <div class="cell"><div class="top"><span class="slug">db-01-01</span><span class="rate">10,267<small>/s</small></span></div><div class="bar"><i style="--w:93%"></i></div><div class="meta"><span>974 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-01-02</span><span class="rate">9,533<small>/s</small></span></div><div class="bar"><i style="--w:86%"></i></div><div class="meta"><span>1049 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-01-03</span><span class="rate">9,775<small>/s</small></span></div><div class="bar"><i style="--w:88%"></i></div><div class="meta"><span>1023 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-01-04</span><span class="rate">10,417<small>/s</small></span></div><div class="bar"><i style="--w:94%"></i></div><div class="meta"><span>960 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-01-05</span><span class="rate">9,588<small>/s</small></span></div><div class="bar"><i style="--w:87%"></i></div><div class="meta"><span>1043 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-01-06</span><span class="rate">9,960<small>/s</small></span></div><div class="bar"><i style="--w:90%"></i></div><div class="meta"><span>1004 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-01-07</span><span class="rate">9,302<small>/s</small></span></div><div class="bar"><i style="--w:84%"></i></div><div class="meta"><span>1075 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-01-08</span><span class="rate">11,086<small>/s</small></span></div><div class="bar"><i style="--w:100%"></i></div><div class="meta"><span>902 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-01-09</span><span class="rate">9,569<small>/s</small></span></div><div class="bar"><i style="--w:86%"></i></div><div class="meta"><span>1045 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-01-10</span><span class="rate">9,747<small>/s</small></span></div><div class="bar"><i style="--w:88%"></i></div><div class="meta"><span>1026 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-01-01</span><span class="rate">10,267<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:93%"></i></div><div class="meta"><span>974 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-01-02</span><span class="rate">9,533<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:86%"></i></div><div class="meta"><span>1049 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-01-03</span><span class="rate">9,775<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:88%"></i></div><div class="meta"><span>1023 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-01-04</span><span class="rate">10,417<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:94%"></i></div><div class="meta"><span>960 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-01-05</span><span class="rate">9,588<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:87%"></i></div><div class="meta"><span>1043 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-01-06</span><span class="rate">9,960<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:90%"></i></div><div class="meta"><span>1004 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-01-07</span><span class="rate">9,302<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:84%"></i></div><div class="meta"><span>1075 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-01-08</span><span class="rate">11,086<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:100%"></i></div><div class="meta"><span>902 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-01-09</span><span class="rate">9,569<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:86%"></i></div><div class="meta"><span>1045 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-01-10</span><span class="rate">9,747<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:88%"></i></div><div class="meta"><span>1026 ms</span><span class="ok">10k ✓</span></div></div>
       </div>
     </div>
 
     <div class="wsgroup">
       <p class="wstitle">workspace stress-02 &middot; 10 databases &middot; 100,000 rows &middot; 13.9s</p>
       <div class="rack">
-        <div class="cell"><div class="top"><span class="slug">db-02-01</span><span class="rate">9,990<small>/s</small></span></div><div class="bar"><i style="--w:94%"></i></div><div class="meta"><span>1001 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-02-02</span><span class="rate">9,234<small>/s</small></span></div><div class="bar"><i style="--w:87%"></i></div><div class="meta"><span>1083 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-02-03</span><span class="rate">10,050<small>/s</small></span></div><div class="bar"><i style="--w:95%"></i></div><div class="meta"><span>995 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-02-04</span><span class="rate">10,173<small>/s</small></span></div><div class="bar"><i style="--w:96%"></i></div><div class="meta"><span>983 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-02-05</span><span class="rate">10,040<small>/s</small></span></div><div class="bar"><i style="--w:95%"></i></div><div class="meta"><span>996 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-02-06</span><span class="rate">10,070<small>/s</small></span></div><div class="bar"><i style="--w:95%"></i></div><div class="meta"><span>993 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-02-07</span><span class="rate">9,524<small>/s</small></span></div><div class="bar"><i style="--w:90%"></i></div><div class="meta"><span>1050 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-02-08</span><span class="rate">10,582<small>/s</small></span></div><div class="bar"><i style="--w:100%"></i></div><div class="meta"><span>945 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-02-09</span><span class="rate">9,960<small>/s</small></span></div><div class="bar"><i style="--w:94%"></i></div><div class="meta"><span>1004 ms</span><span class="ok">10k ✓</span></div></div>
-        <div class="cell"><div class="top"><span class="slug">db-02-10</span><span class="rate">9,699<small>/s</small></span></div><div class="bar"><i style="--w:92%"></i></div><div class="meta"><span>1031 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-02-01</span><span class="rate">9,990<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:94%"></i></div><div class="meta"><span>1001 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-02-02</span><span class="rate">9,234<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:87%"></i></div><div class="meta"><span>1083 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-02-03</span><span class="rate">10,050<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:95%"></i></div><div class="meta"><span>995 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-02-04</span><span class="rate">10,173<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:96%"></i></div><div class="meta"><span>983 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-02-05</span><span class="rate">10,040<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:95%"></i></div><div class="meta"><span>996 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-02-06</span><span class="rate">10,070<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:95%"></i></div><div class="meta"><span>993 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-02-07</span><span class="rate">9,524<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:90%"></i></div><div class="meta"><span>1050 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-02-08</span><span class="rate">10,582<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:100%"></i></div><div class="meta"><span>945 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-02-09</span><span class="rate">9,960<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:94%"></i></div><div class="meta"><span>1004 ms</span><span class="ok">10k ✓</span></div></div>
+        <div class="cell"><div class="top"><span class="slug">db-02-10</span><span class="rate">9,699<small>/s</small></span></div><div class="bar" aria-hidden="true"><i style="--w:92%"></i></div><div class="meta"><span>1031 ms</span><span class="ok">10k ✓</span></div></div>
       </div>
     </div>
   </section>
@@ -218,8 +230,8 @@
     <div class="shead"><span class="chip dark">D</span><span class="t">Destroy &amp; cleanup</span><span class="note">the delete path under load &amp; after</span></div>
     <p class="lede">Every database was deleted through the API, then the workspaces were removed. The control plane killed each sqld process, freed its port, removed its data directory and its <em>per-database signing key</em>, and cleaned now-empty parents &mdash; a gap found during this test and fixed in the same session.</p>
     <div class="grid2">
-      <div class="block"><h3>Delete latency</h3><dl class="kv"><dt>per database (20 deletes)</dt><dd>20 &ndash; 41 ms</dd><dt>workspace removal</dt><dd>204 &middot; ~0.3 s</dd><dt>sqld processes after</dt><dd>24 &rarr; 3</dd></dl></div>
-      <div class="block"><h3>Residue check</h3><p>Per-database keys removed from <code>keys/</code>, data directories gone from disk, API back to the pre-test workspace set. The empty-parent cleanup found in the test is now covered by unit tests (parents removed when empty, preserved when siblings remain).</p></div>
+      <div class="block"><h3>Delete latency</h3><dl class="kv"><dt>per database (20 deletes)</dt><dd>20 &ndash; 41 ms</dd><dt>workspace removal</dt><dd>204 &middot; ~0.3 s</dd><dt>sqld processes after</dt><dd>23 &rarr; 3</dd></dl></div>
+      <div class="block"><h3>Residue check</h3><p>Per-database keys removed from <code>keys/</code>, data directories gone from disk, API back to the pre-test workspace set. The empty-parent cleanup found in the test is now covered by unit tests (parents removed when empty, preserved when siblings remain). Destroy-phase figures here are from the run log; the headline totals are in the linked evidence file.</p></div>
     </div>
   </section>
 
@@ -229,7 +241,7 @@
       <div class="block"><h3>Peaks observed on a 1-GB box</h3><dl class="kv">
         <dt>Host memory used</dt><dd>386 / 969 MB (peak)</dd>
         <dt>All sqld processes RSS</dt><dd>584 MB (peak)</dd>
-        <dt>Concurrent sqld processes</dt><dd>24</dd>
+        <dt>Concurrent sqld processes</dt><dd>23 (peak)</dd>
         <dt>Concurrent databases</dt><dd>23</dd>
         <dt>Control-plane API latency</dt><dd>max 1.4 ms (sampled)</dd>
         <dt>Load average (1 vCPU)</dt><dd>peak 1.43</dd>
@@ -254,9 +266,11 @@
   <footer class="foot">
     <div>
       <div class="cmd">curl -fsSL https://raw.githubusercontent.com/thaqiif/sqlitend/main/scripts/install.sh | bash</div>
-      <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-faint);margin:8px 0 0"><a href="./index.html">← sqlitend home</a> &nbsp;·&nbsp; <a href="./spd-report.html">The Speedtest Replication</a> &nbsp;·&nbsp; <a href="./spd-conc-report.html">The Million-Statement Run</a> &nbsp;·&nbsp; reproducible &mdash; same installer, same pinned sqld binary (SHA-256 verified).</p>
+      <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-faint);margin:8px 0 0"><a href="./index.html">← sqlitend home</a> &nbsp;·&nbsp; <a href="./spd-report.html">The Speedtest Replication</a> &nbsp;·&nbsp; <a href="./spd-conc-report.html">The Million-Statement Run</a> &nbsp;·&nbsp; <a href="./stress-evidence.json">raw evidence ↗</a> &nbsp;·&nbsp; reproducible &mdash; same installer, same pinned sqld binary (SHA-256 verified).</p>
     </div>
     <div class="meta">sqlitend 0.1.0 &middot; sqld 0.24.32<br>2026-09-06 &middot; host: sqlitendtest</div>
   </footer>
 
 </div>
+</body>
+</html>

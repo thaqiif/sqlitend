@@ -48,7 +48,7 @@
         "errors": 0
       }
     },
-    "finding": "aggregate throughput is flat ~2.2k/s at conc 1-4 on one core, declines past 8, thrashes >=16; p95 climbs with queueing"
+    "finding": "aggregate throughput is flat ~2,250/s at conc 1-4 on one core, declines past 8, thrashes >=16; p95 climbs with queueing"
   },
   "million": {
     "note": "read-heavy 80/20 mix, fresh DB seeded 100k, conc=4, fixed 1,000,000 ops",

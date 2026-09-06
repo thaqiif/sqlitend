@@ -1,6 +1,11 @@
 {
   "captured": "2026-09-06T15:56:00Z",
-  "host": { "cpu": "1 vCPU", "ramMb": 969, "platform": "Linux aarch64 (Debian 13)", "name": "sqlitendtest" },
+  "host": {
+    "cpu": "1 vCPU",
+    "ramMb": 969,
+    "platform": "Linux aarch64 (Debian 13)",
+    "name": "sqlitendtest"
+  },
   "officialSpeedtest1": {
     "sqlite": "3.53.4 (2026-07-24, amalgamation 3530400)",
     "compile": "gcc -O3 -DSQLITE_ENABLE_RTREE -I sqlite-amalgamation-3530400",
@@ -12,9 +17,105 @@
   },
   "port": {
     "script": "scripts of spd-port.mjs: batched inserts in growing group sizes, PK/range/like lookups, full scan, update, delete, 100KB blobs",
-    "steps": 15,
+    "steps": [
+      {
+        "step": "create schema + indexes",
+        "embeddedMs": 16,
+        "sqldMs": 67,
+        "ratio": 4.2
+      },
+      {
+        "step": "insert 5,000 rows, 1/stmt",
+        "embeddedMs": 203,
+        "sqldMs": 4134,
+        "ratio": 20.4
+      },
+      {
+        "step": "insert 5,000 rows, 10/stmt",
+        "embeddedMs": 50,
+        "sqldMs": 495,
+        "ratio": 9.9
+      },
+      {
+        "step": "insert 5,000 rows, 100/stmt",
+        "embeddedMs": 21,
+        "sqldMs": 148,
+        "ratio": 7.0
+      },
+      {
+        "step": "insert 5,000 rows, 1,000/stmt",
+        "embeddedMs": 28,
+        "sqldMs": 95,
+        "ratio": 3.4
+      },
+      {
+        "step": "insert 2,000 rows, one stmt",
+        "embeddedMs": 9,
+        "sqldMs": 39,
+        "ratio": 4.3
+      },
+      {
+        "step": "update 1,000 rows via PK",
+        "embeddedMs": 1,
+        "sqldMs": 2,
+        "ratio": 2.0
+      },
+      {
+        "step": "update 2,000 rows via index",
+        "embeddedMs": 13,
+        "sqldMs": 30,
+        "ratio": 2.3
+      },
+      {
+        "step": "delete 500 rows via PK",
+        "embeddedMs": 0,
+        "sqldMs": 5,
+        "ratio": null
+      },
+      {
+        "step": "full-table scan",
+        "embeddedMs": 2,
+        "sqldMs": 6,
+        "ratio": 3.0
+      },
+      {
+        "step": "2,000 PK point lookups",
+        "embeddedMs": 11,
+        "sqldMs": 1278,
+        "ratio": 116
+      },
+      {
+        "step": "2,000 indexed range lookups",
+        "embeddedMs": 62,
+        "sqldMs": 1655,
+        "ratio": 26.7
+      },
+      {
+        "step": "LIKE prefix scan",
+        "embeddedMs": 7,
+        "sqldMs": 55,
+        "ratio": 7.9
+      },
+      {
+        "step": "insert 100 blobs of 100KB",
+        "embeddedMs": 55,
+        "sqldMs": 342,
+        "ratio": 6.2
+      },
+      {
+        "step": "read back 50 blobs",
+        "embeddedMs": 5,
+        "sqldMs": 34,
+        "ratio": 6.8
+      }
+    ],
     "runtime": "Bun 1.4.2 on the same VM",
-    "embedded": { "label": "embedded-bun", "totalMs": 483, "errors": 0, "db": "bun:sqlite local file" },
+    "embedded": {
+      "label": "embedded-bun",
+      "totalMs": 483,
+      "errors": 0,
+      "db": "bun:sqlite local file"
+    },
     "sqld": {
       "label": "sqld-over-hrana",
       "totalMs": 8385,
@@ -22,7 +123,11 @@
       "url": "ws://127.0.0.1:6107 (loopback)",
       "endpoint": "created via sqlitend API; one full-access token minted",
       "overheadRatio": 17.4,
-      "hostPeaksDuringRun": { "usedMb": 332, "load1": 0.84, "sqldRssMb": 31 }
+      "hostPeaksDuringRun": {
+        "usedMb": 332,
+        "load1": 0.84,
+        "sqldRssMb": 31
+      }
     }
   }
 }

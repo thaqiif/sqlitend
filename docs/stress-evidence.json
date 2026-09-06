@@ -19,7 +19,7 @@
     "peakMemUsedMb": 386,
     "maxDatabaseCount": 23,
     "maxSqldRssMb": 584,
-    "maxApiLatencyMs": 0.001409
+    "maxApiLatencySec": 0.001409
   },
   "verifier": {
     "rounds": [

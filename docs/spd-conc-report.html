@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Million-Statement Run</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
@@ -6,7 +11,7 @@
     --card: #FCFBF7;
     --ink: #1C2622;
     --ink-soft: #49544F;
-    --ink-faint: #6B756F;
+    --ink-faint: #5E6A63;
     --line: #E2DFD5;
     --line-strong: #CBC7BA;
     --petrol: #0E6B5C;
@@ -135,15 +140,22 @@
   .foot .cmd { font-family: "IBM Plex Mono", monospace; font-size: 12px; background: var(--card); border: 1px solid var(--line); padding: 10px 14px; overflow-x: auto; max-width: 100%; }
   .foot .meta { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-faint); text-align: right; }
 
-  @media (prefers-reduced-motion: no-preference) { }
+  /* report nav */
+  .rnav { display: flex; align-items: center; gap: 8px; background: var(--ink); padding: 8px 14px; position: sticky; top: 0; z-index: 20; }
+  .rnav a { color: var(--paper); text-decoration: none; font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: .06em; }
+  .rnav a:hover { text-decoration: underline; }
+
 </style>
+</head>
+<body>
+<nav class="rnav"><a href="./index.html">← sqlitend home</a></nav>
 
 <div class="wrap">
 
   <header class="mast">
     <div class="kicker">sqlitend &middot; benchmark report &middot; 2026-09-06</div>
     <h1>The Million-Statement Run</h1>
-    <p class="sub">One million statements, four concurrent clients, one isolated sqld database on a single-core virtual machine &mdash; and not one failure. This is what happens when you stop asking SQLite &ldquo;how fast?&rdquo; and start asking a server &ldquo;how busy can you get?&rdquo;</p>
+    <p class="sub">One million statements, four concurrent clients, one isolated sqld database on a single-core virtual machine &mdash; and not one failure. Every statement is a live network round trip over loopback Hrana: 1,000,000 total, 0 failures, p95 6 ms.</p>
     <div class="specstrip">
       <div class="spec"><span class="k">Machine</span><span class="v">1 vCPU &middot; 1 GB RAM</span></div>
       <div class="spec"><span class="k">Platform</span><span class="v">Linux aarch64 (Debian 13)</span></div>
@@ -162,24 +174,24 @@
 
   <section>
     <div class="shead"><span class="chip">1</span><span class="t">The concurrency curve</span><span class="note">write-heavy 30/70 mix &middot; 35 s per level</span></div>
-    <p class="lede">Before the million, a sweep: 1, 4, 8, then 16 simultaneous clients, each running an identical mixed workload against the same seeded database. The headline is a wall, not a curve &mdash; sqld has a single writer thread, so aggregate throughput is flat at roughly 2,200&nbsp;statements per second from one client to four. Concurrency buys queueing, not speed: p95 latency quadruples by 16 clients and the box stops cooperating entirely past that point (the run at 32 and 64 clients collapsed; the 1-minute load average hit 56 on one core). Zero errors at every level &mdash; the server said no politely, by returning <code>SQLITE_BUSY</code>, and the client retried with backoff exactly as a production driver would.</p>
+    <p class="lede">Before the million, a sweep: 1, 4, 8, then 16 simultaneous clients, each running an identical mixed workload against the same seeded database. The headline is a wall, not a curve &mdash; sqld has a single writer thread, so aggregate throughput is flat at roughly 2,250&nbsp;statements per second from one client to four. Concurrency buys queueing, not speed: p95 climbs ~5&times; from four clients to sixteen (6&rarr;28 ms) and ~28&times; from one (1&rarr;28 ms), and the box stops cooperating past that point (32 and 64 client runs collapsed &mdash; not captured in the evidence file; the separate wedge finding documented load ~56). Zero errors at every level &mdash; the server said no politely, by returning <code>SQLITE_BUSY</code>, and the client retried with backoff exactly as a production driver would.</p>
     <div class="tablewrap">
       <table>
         <thead><tr><th>Clients</th><th>Ops / 35 s</th><th>Rate</th><th>p50</th><th>p95</th><th>p99</th><th>BUSY retries</th><th>Failures</th></tr></thead>
         <tbody>
           <tr><td>1</td><td>78,018</td><td>2,229 /s</td><td>0 ms</td><td>1 ms</td><td>3 ms</td><td>0</td><td class="num-good">0</td></tr>
-          <tr><td>4</td><td>78,882</td><td>2,254 /s</td><td>1 ms</td><td>6 ms <span class="bar"><i style="--w:18%"></i></span></td><td>8 ms</td><td>7</td><td class="num-good">0</td></tr>
-          <tr><td>8</td><td>68,790</td><td>1,965 /s</td><td>2 ms</td><td>14 ms <span class="bar"><i style="--w:48%"></i></span></td><td>22 ms</td><td>27</td><td class="num-good">0</td></tr>
-          <tr><td>16</td><td>47,408</td><td>1,354 /s</td><td>4 ms</td><td>28 ms <span class="bar"><i style="--w:100%"></i></span></td><td>80 ms</td><td>44</td><td class="num-good">0</td></tr>
+          <tr><td>4</td><td>78,882</td><td>2,254 /s</td><td>1 ms</td><td>6 ms <span class="bar" aria-hidden="true"><i style="--w:18%"></i></span></td><td>8 ms</td><td>7</td><td class="num-good">0</td></tr>
+          <tr><td>8</td><td>68,790</td><td>1,965 /s</td><td>2 ms</td><td>14 ms <span class="bar" aria-hidden="true"><i style="--w:48%"></i></span></td><td>22 ms</td><td>27</td><td class="num-good">0</td></tr>
+          <tr><td>16</td><td>47,408</td><td>1,354 /s</td><td>4 ms</td><td>28 ms <span class="bar" aria-hidden="true"><i style="--w:100%"></i></span></td><td>80 ms</td><td>44</td><td class="num-good">0</td></tr>
         </tbody>
-        <tfoot><tr><td>&ge; 32</td><td colspan="6">collapse &mdash; single core thrashes (load 56), no output</td><td class="num-good">&mdash;</td></tr></tfoot>
+        <tfoot><tr><td>&ge; 32</td><td colspan="6">collapse &mdash; thrash, not captured in the evidence file</td><td class="num-good">&mdash;</td></tr></tfoot>
       </table>
     </div>
   </section>
 
   <section>
     <div class="shead"><span class="chip amber">2</span><span class="t">The million-statement run</span><span class="note">read-heavy 80/20 mix &middot; fresh DB &middot; 4 clients &middot; 666.8 s</span></div>
-    <p class="lede">A brand-new database, seeded with 100,000 rows, then four clients hammering it with a realistic serverless OLTP mix &mdash; 12% single-row inserts, 8% point updates, 35% indexed point reads, 25% range counts, 20% top-N reads &mdash; until exactly 1,000,000 statements had been served. The wall from the sweep was the write-heavy part; at this mix the same wall stands far away. Throughput held a mean of 1,500&nbsp;/s for eleven minutes, and the tail was astonishingly calm.</p>
+    <p class="lede">A brand-new database, seeded with 100,000 rows, then four clients hammering it with a realistic serverless OLTP mix &mdash; 12% single-row inserts, 8% point updates, 35% indexed point reads, 25% range counts, 20% top-N reads &mdash; until exactly 1,000,000 statements had been served. The wall from the sweep was the write-heavy part; at this mix the same wall stands far away. Throughput held a mean of 1,500&nbsp;/s for eleven minutes, and p99 held at 11 ms for the entire run.</p>
 
     <div class="compare">
       <div class="c"><div class="who">throughput</div><div class="val">1,500<small> /s mean</small></div><p>870 &ndash; 1,872 /s per second; flat until the very end.</p></div>
@@ -218,7 +230,7 @@
   <section>
     <div class="shead"><span class="chip dark">3</span><span class="t">The wall is real &mdash; and it isn&rsquo;t the network</span></div>
     <div class="grid2">
-      <div class="block"><h3>Single-writer, by design</h3><p>sqld serializes writes through one writer thread &mdash; exactly as SQLite itself does, only across a socket. The sweep&rsquo;s flat ceiling (~2,200/s at 1&ndash;4 clients) is that serialization on one core. The practical law it implies: <em>per-statement round trips are the currency, so batch your writes</em>. In the companion speedtest replication, 1,000-row batches cut serverless overhead from 20&times; to 3.4&times;.</p></div>
+      <div class="block"><h3>Single-writer, by design</h3><p>sqld serializes writes through one writer thread &mdash; exactly as SQLite itself does, only across a socket. The sweep&rsquo;s flat ceiling (~2,250/s at 1&ndash;4 clients) is that serialization on one core. The practical law it implies: <em>per-statement round trips are the currency, so batch your writes</em>. In the companion speedtest replication, 1,000-row batches cut serverless overhead from 20&times; to 3.4&times;.</p></div>
       <div class="block"><h3>One real bug found</h3><p>A sustained write-heavy run (30% writes, retry storms, growing table) left the benchmark sqld process busy-spinning at 100% CPU with zero clients attached &mdash; load 56 on one core, machine otherwise idle. Killing the process ended it instantly; the read-heavy million ran eleven minutes without a trace of it. This is a sqld behavior worth knowing before you run heavy write concurrency against a solo node: monitor per-database CPU and batch aggressively.</p></div>
     </div>
   </section>
@@ -234,9 +246,11 @@
   <footer class="foot">
     <div>
       <div class="cmd">curl -fsSL https://raw.githubusercontent.com/thaqiif/sqlitend/main/scripts/install.sh | bash</div>
-      <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-faint);margin:8px 0 0"><a href="./index.html">← sqlitend home</a> &nbsp;·&nbsp; sister reports: <a href="./spd-report.html">The Speedtest Replication</a> &middot; <a href="./stress-report.html">The One-Gigabyte Test</a></p>
+      <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-faint);margin:8px 0 0"><a href="./index.html">← sqlitend home</a> &nbsp;·&nbsp; sister reports: <a href="./spd-report.html">The Speedtest Replication</a> &middot; <a href="./stress-report.html">The One-Gigabyte Test</a> &nbsp;·&nbsp; <a href="./spd-conc-evidence.json">raw evidence ↗</a></p>
     </div>
     <div class="meta">sqlitend 0.1.0 &middot; sqld 0.24.32<br>2026-09-06 &middot; host: sqlitendtest</div>
   </footer>
 
 </div>
+</body>
+</html>

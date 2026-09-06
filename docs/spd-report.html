@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Speedtest Replication</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
@@ -6,7 +11,7 @@
     --card: #FCFBF7;
     --ink: #1C2622;
     --ink-soft: #49544F;
-    --ink-faint: #6B756F;
+    --ink-faint: #5E6A63;
     --line: #E2DFD5;
     --line-strong: #CBC7BA;
     --petrol: #0E6B5C;
@@ -128,8 +133,15 @@
   .foot .cmd { font-family: "IBM Plex Mono", monospace; font-size: 12px; background: var(--card); border: 1px solid var(--line); padding: 10px 14px; overflow-x: auto; max-width: 100%; }
   .foot .meta { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-faint); text-align: right; }
 
-  @media (prefers-reduced-motion: no-preference) { }
+  /* report nav */
+  .rnav { display: flex; align-items: center; gap: 8px; background: var(--ink); padding: 8px 14px; position: sticky; top: 0; z-index: 20; }
+  .rnav a { color: var(--paper); text-decoration: none; font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: .06em; }
+  .rnav a:hover { text-decoration: underline; }
+
 </style>
+</head>
+<body>
+<nav class="rnav"><a href="./index.html">← sqlitend home</a></nav>
 
 <div class="wrap">
 
@@ -150,7 +162,7 @@
     <div class="tile"><div class="n">6.494<small> s</small></div><div class="l">Official speedtest1</div><div class="d">C tool &middot; default size 100 &middot; full testset suite</div></div>
     <div class="tile"><div class="n">483<small> ms</small></div><div class="l">Port, embedded</div><div class="d">same 15-step suite &middot; bun:sqlite, local file</div></div>
     <div class="tile warn"><div class="n">8,385<small> ms</small></div><div class="l">Port, through sqld</div><div class="d">identical statements &middot; Hrana over loopback</div></div>
-    <div class="tile zero"><div class="n">17.4&times;</div><div class="l">Serverless overhead</div><div class="d">and it collapses to ~3&times; when you batch writes</div></div>
+    <div class="tile zero"><div class="n">17.4&times;</div><div class="l">Serverless overhead</div><div class="d">single-row insert overhead 20.4&times; &rarr; 3.4&times; at 1,000 rows/stmt</div></div>
   </div>
 
   <section>
@@ -189,17 +201,18 @@
       <table>
         <thead><tr><th>Step</th><th>embedded</th><th>sqld</th><th>Ratio</th></tr></thead>
         <tbody>
-          <tr><td>insert 5,000 rows &middot; 1 row/statement</td><td>203 ms</td><td>4,134 ms <span class="bar"><i class="hot" style="--w:100%"></i></span></td><td class="ratio">20.4&times;</td></tr>
-          <tr><td>insert 5,000 rows &middot; 10 rows/statement</td><td>50 ms</td><td>495 ms <span class="bar"><i style="--w:12%"></i></span></td><td class="ratio">9.9&times;</td></tr>
-          <tr><td>insert 5,000 rows &middot; 100 rows/statement</td><td>21 ms</td><td>148 ms <span class="bar"><i style="--w:4%"></i></span></td><td class="ratio">7.0&times;</td></tr>
-          <tr><td>insert 5,000 rows &middot; 1,000 rows/statement</td><td>28 ms</td><td>95 ms <span class="bar"><i style="--w:2%"></i></span></td><td class="ratio">3.4&times;</td></tr>
+          <tr><td>create schema + indexes</td><td>16 ms</td><td>67 ms <span class="bar" aria-hidden="true"><i class="hot" style="--w:2%"></i></span></td><td class="ratio">4.2&times;</td></tr>
+          <tr><td>insert 5,000 rows &middot; 1 row/statement</td><td>203 ms</td><td>4,134 ms <span class="bar" aria-hidden="true"><i class="hot" style="--w:100%"></i></span></td><td class="ratio">20.4&times;</td></tr>
+          <tr><td>insert 5,000 rows &middot; 10 rows/statement</td><td>50 ms</td><td>495 ms <span class="bar" aria-hidden="true"><i style="--w:12%"></i></span></td><td class="ratio">9.9&times;</td></tr>
+          <tr><td>insert 5,000 rows &middot; 100 rows/statement</td><td>21 ms</td><td>148 ms <span class="bar" aria-hidden="true"><i style="--w:4%"></i></span></td><td class="ratio">7.0&times;</td></tr>
+          <tr><td>insert 5,000 rows &middot; 1,000 rows/statement</td><td>28 ms</td><td>95 ms <span class="bar" aria-hidden="true"><i style="--w:2%"></i></span></td><td class="ratio">3.4&times;</td></tr>
           <tr><td>insert 2,000 rows &middot; one statement</td><td>9 ms</td><td>39 ms</td><td class="ratio">4.3&times;</td></tr>
           <tr><td>update 1,000 rows via PK</td><td>1 ms</td><td>2 ms</td><td class="ratio">2.0&times;</td></tr>
           <tr><td>update 2,000 rows via index</td><td>13 ms</td><td>30 ms</td><td class="ratio">2.3&times;</td></tr>
           <tr><td>delete 500 rows via PK</td><td>0 ms</td><td>5 ms</td><td class="ratio">&mdash;</td></tr>
           <tr><td>full-table scan (count + sum)</td><td>2 ms</td><td>6 ms</td><td class="ratio">3.0&times;</td></tr>
-          <tr><td>2,000 PK point lookups</td><td>11 ms</td><td>1,278 ms <span class="bar"><i class="hot" style="--w:31%"></i></span></td><td class="ratio">116&times;</td></tr>
-          <tr><td>2,000 indexed range lookups</td><td>62 ms</td><td>1,655 ms <span class="bar"><i class="hot" style="--w:40%"></i></span></td><td class="ratio">26.7&times;</td></tr>
+          <tr><td>2,000 PK point lookups</td><td>11 ms</td><td>1,278 ms <span class="bar" aria-hidden="true"><i class="hot" style="--w:31%"></i></span></td><td class="ratio">116&times;</td></tr>
+          <tr><td>2,000 indexed range lookups</td><td>62 ms</td><td>1,655 ms <span class="bar" aria-hidden="true"><i class="hot" style="--w:40%"></i></span></td><td class="ratio">26.7&times;</td></tr>
           <tr><td>LIKE prefix scan</td><td>7 ms</td><td>55 ms</td><td class="ratio">7.9&times;</td></tr>
           <tr><td>insert 100 &times; 100 KB blobs</td><td>55 ms</td><td>342 ms</td><td class="ratio">6.2&times;</td></tr>
           <tr><td>read back 50 blobs</td><td>5 ms</td><td>34 ms</td><td class="ratio">6.8&times;</td></tr>
@@ -235,9 +248,11 @@
     <div>
       <div class="cmd">curl -fsSL https://raw.githubusercontent.com/thaqiif/sqlitend/main/scripts/install.sh | bash</div>
       <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-faint);margin:8px 0 0">reproducible &mdash; same installer, same pinned sqld binary (SHA-256 verified).</p>
-      <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-faint);margin:8px 0 0"><a href="./index.html">← sqlitend home</a> &nbsp;·&nbsp; sister reports: <a href="./spd-conc-report.html">The Million-Statement Run</a> &middot; <a href="./stress-report.html">The One-Gigabyte Test</a></p>
+      <p style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-faint);margin:8px 0 0"><a href="./index.html">← sqlitend home</a> &nbsp;·&nbsp; sister reports: <a href="./spd-conc-report.html">The Million-Statement Run</a> &middot; <a href="./stress-report.html">The One-Gigabyte Test</a> &nbsp;·&nbsp; <a href="./spd-evidence.json">raw evidence ↗</a></p>
     </div>
     <div class="meta">sqlitend 0.1.0 &middot; sqld 0.24.32 &middot; SQLite 3.53.4<br>2026-09-06 &middot; host: sqlitendtest</div>
   </footer>
 
 </div>
+</body>
+</html>

@@ -12,7 +12,7 @@
     --card: #FCFBF7;
     --ink: #1C2622;
     --ink-soft: #49544F;
-    --ink-faint: #6B756F;
+    --ink-faint: #5E6A63;
     --line: #E2DFD5;
     --line-strong: #CBC7BA;
     --petrol: #0E6B5C;
@@ -44,6 +44,10 @@
   a:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   code, pre, .mono { font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; }
   .wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
+
+  /* ---------- skip link ---------- */
+  .skip { position: fixed; top: 8px; left: -9999px; z-index: 60; background: var(--ink); color: var(--paper); padding: 8px 14px; border-radius: 2px; font-size: 13px; text-decoration: none; }
+  .skip:focus, .skip:focus-visible { left: 8px; }
 
   /* ---------- nav ---------- */
   .nav {
@@ -89,14 +93,14 @@
   /* ---------- terminal ---------- */
   .term {
     background: var(--term); border: 1px solid var(--term-line); border-radius: 6px;
-    box-shadow: 0 14px 40px rgba(10, 40, 33, .14);
+    box-shadow: 0 10px 28px rgba(10, 40, 33, .12);
     max-width: 860px; margin: 0 0 22px; overflow: hidden;
   }
   .term .bar { display: flex; align-items: center; gap: 6px; padding: 9px 14px; border-bottom: 1px solid var(--term-line); background: rgba(255,255,255,.02); }
   .term .bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--term-line); display: inline-block; }
-  .term .bar i:nth-of-type(1) { background: #C96A5A; }
-  .term .bar i:nth-of-type(2) { background: #C9A55A; }
-  .term .bar i:nth-of-type(3) { background: #74B087; }
+  .term .bar i:nth-of-type(1) { background: #7FCEA8; }
+  .term .bar i:nth-of-type(2) { background: #E8A33D; }
+  .term .bar i:nth-of-type(3) { background: #7FA39A; }
   .term .bar span { margin-left: 8px; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--term-dim); }
   .term pre { margin: 0; padding: 18px 20px 20px; overflow-x: auto; color: var(--term-text); font-size: 13px; line-height: 1.72; }
   .term .p { color: var(--term-warn); font-weight: 600; }
@@ -112,6 +116,9 @@
   .term .tn:nth-child(6) { animation-delay: 1.55s; }
   .term .tn:nth-child(7) { animation-delay: 1.85s; }
   .term .tn:nth-child(8) { animation-delay: 2.15s; }
+  .term .tn:nth-child(9) { animation-delay: 2.45s; }
+  .term .tn:nth-child(10) { animation-delay: 2.75s; }
+  .term .tn:nth-child(11) { animation-delay: 3.05s; }
   @keyframes tnin { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
   .caret { display: inline-block; width: 8px; height: 14px; background: var(--term-warn); vertical-align: -2px; margin-left: 2px; animation: blink 1.06s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
@@ -155,6 +162,8 @@
   .report .go { margin-top: auto; font-weight: 600; text-decoration: none; border-top: 1px solid var(--line); padding-top: 12px; display: block; font-size: 13.5px; }
   .report .go:hover { color: var(--petrol-deep); }
   .report .go::after { content: " →"; font-family: "IBM Plex Mono", monospace; }
+  .report .ev { display: block; margin-top: 8px; font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-faint); text-decoration: underline; text-underline-offset: 2px; }
+  .report .ev:hover { color: var(--petrol); }
 
   .gate { margin-top: 28px; background: var(--ink); color: var(--paper); padding: 18px 22px; display: flex; flex-wrap: wrap; gap: 16px 34px; align-items: center; }
   .gate .g { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--paper); }
@@ -169,12 +178,13 @@
   .caveat code { font-size: 12px; background: #fff; padding: 1px 4px; border: 1px solid #E5CFA8; border-radius: 2px; }
 
   /* ---------- run ---------- */
-  .install-box { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: var(--term); border: 1px solid var(--term-line); border-radius: 4px; padding: 14px 16px; margin-bottom: 30px; }
+  .install-box { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: var(--term); border: 1px solid var(--term-line); border-radius: 4px; padding: 14px 16px; margin-bottom: 12px; }
   .install-box code { color: var(--term-text); font-size: 13.5px; overflow-x: auto; white-space: nowrap; flex: 1 1 auto; }
   .install-box .tag { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--term-dim); letter-spacing: .08em; text-transform: uppercase; }
+  .verify { margin: 0 0 30px; font-size: 13px; color: var(--ink-soft); max-width: 80ch; }
   .copy { font-family: "IBM Plex Mono", monospace; font-size: 12px; background: transparent; border: 1px solid var(--term-line); color: var(--term-ok); padding: 7px 12px; border-radius: 2px; cursor: pointer; }
   .copy:hover { border-color: var(--term-ok); }
-  .copy.copied { border-color: var(--term-ok); }
+  .copy.copied { background: var(--term-ok); color: var(--term); border-color: var(--term-ok); }
 
   .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
   .step { border-top: 2px solid var(--line-strong); padding-top: 12px; }
@@ -218,12 +228,13 @@
 
   @media (max-width: 900px) {
     .why { grid-template-columns: 1fr; }
-    .proof-grid { grid-template-columns: 1fr; }
+    .proof-grid { grid-template-columns: 1fr 1fr; }
     .steps { grid-template-columns: 1fr 1fr; }
     .foot-grid { grid-template-columns: 1fr 1fr; gap: 24px; }
   }
   @media (max-width: 560px) {
     .steps { grid-template-columns: 1fr; }
+    .proof-grid { grid-template-columns: 1fr; }
     .foot-grid { grid-template-columns: 1fr; }
     .nav .links a:not(.gh) { display: none; }
   }
@@ -234,6 +245,7 @@
 </style>
 </head>
 <body>
+<a class="skip" href="#top">Skip to content</a>
 
 <!-- ================= NAV ================= -->
 <nav class="nav"><div class="wrap in">
@@ -250,7 +262,7 @@
 <!-- ================= HERO ================= -->
 <header class="hero" id="top">
   <div class="wrap">
-    <p class="kicker">Self-hosted SQLite platform · libSQL / sqld · one operator</p>
+    <p class="kicker">libSQL / sqld · self-hosted · one operator per box</p>
     <h1>A private SQLite platform on your own box.</h1>
     <p class="lead">sqlitend runs <strong>sqld</strong> (libSQL's embeddable server) as plain subprocesses on the machine you already have — no containers, no cluster, no vendor. Create a database, get a connection URL and a token, and point any libSQL client at it. <strong>The whole round trip takes under a minute.</strong></p>
     <div class="cta-row">
@@ -259,16 +271,16 @@
     </div>
 
     <div class="term">
-      <div class="bar"><i></i><i></i><i></i><span>sqlitend · the killer workflow, end to end</span></div>
+      <div class="bar"><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><span>sqlitend · create → connect → done, end to end</span></div>
       <pre><span class="tn"><span class="p">$</span> <span class="path">curl -fsSL https://raw.githubusercontent.com/thaqiif/sqlitend/main/scripts/install.sh | bash</span></span>
 <span class="tn">&nbsp;&nbsp;<span class="ok">✔</span> <span class="dim">Bun · repo · pinned sqld (SHA-256) · web UI built</span> <span class="dim">≈ 1 min</span></span>
 <span class="tn"><span class="p">$</span> <span class="path">~/.local/bin/sqlitend</span></span>
 <span class="tn">&nbsp;&nbsp;<span class="ok">✔</span> <span class="dim">control plane on </span><span class="path">http://0.0.0.0:6100</span> <span class="dim">— public by default</span></span>
-<span class="tn"><span class="p">$</span> <span class="path">curl -s -X POST :6100/api/workspaces -d '{"name":"labs"}'</span></span>
+<span class="tn"><span class="p">$</span> <span class="path">curl -s -X POST http://localhost:6100/api/workspaces -d '{"name":"labs"}'</span></span>
 <span class="tn">&nbsp;&nbsp;<span class="ok">✔</span> <span class="dim">workspace labs · id </span><span class="path">8ec2…</span></span>
-<span class="tn"><span class="p">$</span> <span class="path">curl -s -X POST :6100/api/workspaces/8ec2…/databases -d '{"name":"users"}'</span></span>
+<span class="tn"><span class="p">$</span> <span class="path">curl -s -X POST http://localhost:6100/api/workspaces/8ec2…/databases -d '{"name":"users"}'</span></span>
 <span class="tn">&nbsp;&nbsp;<span class="ok">✔</span> <span class="dim">database users → sqld on :6121 · </span><span class="path">ws://&lt;public-host>:6121</span></span>
-<span class="tn"><span class="p">$</span> <span class="path">curl -s -X POST :6100/api/databases/…/tokens -d '{"expiresInHours":24}'</span></span>
+<span class="tn"><span class="p">$</span> <span class="path">curl -s -X POST http://localhost:6100/api/databases/…/tokens -d '{"expiresInHours":24}'</span></span>
 <span class="tn">&nbsp;&nbsp;<span class="ok">✔</span> <span class="dim">token issued · full access · 24h TTL</span></span>
 <span class="tn"><span class="p">$</span> <span class="path">bun -e 'import { createClient } from "@libsql/client"; …'</span> <span class="caret"></span></span></pre>
       <div class="term-foot">
@@ -280,7 +292,7 @@
     <div class="specstrip">
       <div class="spec"><span class="k">Runtime</span><span class="v">Bun ≥ 1.1 · Hono · React</span></div>
       <div class="spec"><span class="k">Engine</span><span class="v">sqld 0.24.32 pinned</span></div>
-      <div class="spec"><span class="k">Default bind</span><span class="v">0.0.0.0 · DNS-rebind safe</span></div>
+      <div class="spec"><span class="k">Default bind</span><span class="v">0.0.0.0 · all interfaces</span></div>
       <div class="spec"><span class="k">Deploy</span><span class="v">one-line · no root</span></div>
     </div>
   </div>
@@ -292,18 +304,18 @@
     <div class="sec-h">
       <p class="kicker">What it is</p>
       <h2>SQLite scale-out isn't the point.<br>Being able to self-host it is.</h2>
-      <p>SQLite is the most deployed database in the world, and sqld turns each one into a real network server: Hrana over ws://, HTTP, live replicas. The piece everyone was missing is the boring operator — something to create, run, secure, monitor, and retire databases without standing up yet-another-control-plane. sqlitend is that operator: one per machine, REST on the front, plain directories on disk.</p>
+      <p>SQLite is the most deployed database in the world, and sqld turns each one into a real network server: Hrana &mdash; libSQL's WebSocket wire protocol &mdash; over ws://, HTTP, live replicas. The piece everyone was missing is the boring operator — something to create, run, secure, monitor, and retire databases without standing up yet-another-control-plane. sqlitend is that operator: one per machine, REST on the front, plain directories on disk.</p>
     </div>
 
     <div class="why">
       <div class="nar">
         <p>Point a libSQL client at a URL and a database answers — exactly like a hosted service, except the data never leaves your box and nothing in the stack is bigger than one binary and one Bun process.</p>
-        <p>Every database gets its own sqld process on the pinned, SHA-256-verified binary. The control plane supervises it: launch, ready-probe, crash detection, restart adoption, clean delete. A database is a first-class object with an id, a data directory, a port pair, and metrics — not a container you have to feed.</p>
-        <p>Before this page existed, sqlitend was load-tested and reviewer-gated. The numbers are below, with raw evidence published next to each report.</p>
+        <p>Every database gets its own sqld process on the pinned, SHA-256-verified binary. The control plane supervises it: launch, ready-probe, crash detection, restart adoption, clean delete. A database is a first-class object with an id, a data directory, a per-DB http+grpc port pair (6101&ndash;6300), and metrics — not a container you have to feed.</p>
+        <p>Before this page existed, sqlitend was load-tested and reviewer-gated. The numbers are below, with the raw evidence JSON linked on each card.</p>
       </div>
       <div class="feats">
         <div class="feat"><h3>Isolation by key, not by folder</h3><p>Each database owns an <code>Ed25519</code> signing keypair. Tokens are signed per-database — a token for <code>users</code> is rejected by <code>orders</code>. Cross-DB access is <em>cryptographically</em> impossible, not just policy.</p></div>
-        <div class="feat"><h3>Full-access tokens with a lifespan</h3><p>Issue <code>full</code>-scope tokens that expire (24h default), revoke by <code>jti</code>. No shared platform password. sqld v1 is full-access-only — the UI never pretends otherwise.</p></div>
+        <div class="feat"><h3>Full-access tokens with a lifespan</h3><p>Issue <code>full</code>-scope tokens that expire (24h default). No shared platform password. sqld validates JWTs statelessly, so revoke-by-jti is <em>not</em> supported in v1 — to drop a leaked token, use a short TTL or delete and re-create the database (it re-keys).</p></div>
         <div class="feat"><h3>Subprocesses, not containers</h3><p>No Docker daemon, no orchestration. The pinned binary runs supervised under the control plane — crash recovery and restart adoption included. The whole platform is a couple of processes.</p></div>
         <div class="feat"><h3>Live per-database metrics</h3><p>Per-DB CPU and RSS sampled straight from <code>/proc</code>, served to the dashboard and to <code>/api/databases/:id/metrics</code>. See a hot database before your users do.</p></div>
       </div>
@@ -317,7 +329,7 @@
     <div class="sec-h">
       <p class="kicker">The measurements</p>
       <h2>Measured, not marketed.</h2>
-      <p>Every number below was run against the real product on a throwaway <strong>1-vCPU / 969MB / aarch64</strong> VM (Debian 13) on 2026-09-06, and cross-checked against the raw evidence file published next to each report. No synthetic cloud box, no pre-warmed benchmark cluster — the smallest machine this platform will ever be run on.</p>
+      <p>Every number below was run against the real product on a throwaway <strong>1-vCPU / 969MB / aarch64</strong> VM (Debian 13) on 2026-09-06, and cross-checked against the raw evidence JSON linked on each card. No synthetic cloud box, no pre-warmed benchmark cluster — the smallest machine this platform will ever be run on.</p>
     </div>
 
     <div class="proof-grid">
@@ -332,11 +344,12 @@
           <li>Destroy phase clean — no orphaned dirs, no leaks</li>
         </ul>
         <a class="go" href="./stress-report.html">Full stress report</a>
+        <a class="ev" href="./stress-evidence.json">raw evidence ↗</a>
       </div>
 
       <div class="report">
         <span class="meta">Benchmark</span>
-        <div class="n">17.4×<em> network vs embedded</em></div>
+        <div class="n">17.4×<em> network tax · 3.4× batched</em></div>
         <h3>The Speedtest Replication</h3>
         <ul>
           <li>Official SQLite speedtest1 (3.53.4): <strong>TOTAL 6.494s</strong> on this box</li>
@@ -344,6 +357,7 @@
           <li>The honest per-statement network tax — 1,000-row batches collapse it to 3.4×</li>
         </ul>
         <a class="go" href="./spd-report.html">Full benchmark report</a>
+        <a class="ev" href="./spd-evidence.json">raw evidence ↗</a>
       </div>
 
       <div class="report">
@@ -357,6 +371,7 @@
           <li>26 BUSY retries (0.0026%) — the client retried, the DB never dropped one</li>
         </ul>
         <a class="go" href="./spd-conc-report.html">Full concurrency report</a>
+        <a class="ev" href="./spd-conc-evidence.json">raw evidence ↗</a>
       </div>
     </div>
 
@@ -364,14 +379,15 @@
       <span class="g"><b>82</b> tests passing <span>· bun test</span></span>
       <span class="g"><b>5 / 5</b> reviewer PASS <span>· security · reliability · frontend · tests · ops</span></span>
       <span class="g"><b>0</b> type errors <span>· tsc --noEmit, server + web</span></span>
-      <span class="g"><b>≈ 4s</b> e2e killer workflow <span>· create → connect → delete</span></span>
+      <span class="g"><b>≈ 4s</b> e2e round trip <span>· create → connect → delete</span></span>
       <span class="g"><b>0</b> regressions <span>· prod-readiness gate 2026-09-06</span></span>
     </div>
 
     <div class="caveat" id="notes">
-      <h3>Know your writer</h3>
-      <p>sqld is <strong>single-writer</strong>. Aggregate write throughput is flat at ~2.2k/s from 1 to 4 clients on one core, declines past 8, and thrashes beyond 16 — that is sqld's design, not a bug in sqlitend. The lever is batching: 1,000-row inserts close the network gap from 17.4× to 3.4×.</p>
-      <p>One finding worth knowing before write-heavy HA: a sustained write-heavy run left the benchmark sqld process busy-spining at <strong>100% CPU with zero clients attached</strong> (host load ~56 on one core). It killed cleanly, and the read-heavy million never showed it — but batch writes, pool connections, and watch per-DB sqld CPU. The read side is a different story: 80/20 at a million statements, zero errors.</p>
+      <h3>The single-writer wall</h3>
+      <p>sqld is <strong>single-writer</strong>. Aggregate write throughput is flat at ~2,250/s from 1 to 4 clients on one core, declines past 8, and thrashes beyond 16 — that is sqld's design, not a bug in sqlitend. The lever is batching: single-row insert overhead drops from ~20× to 3.4× at 1,000 rows per statement (point lookups stay ~100× — per-statement by nature).</p>
+      <p>One finding worth knowing before write-heavy HA: a sustained write-heavy run left the benchmark sqld process busy-spinning at <strong>100% CPU with zero clients attached</strong> (host load ~56 on one core). It killed cleanly, and the read-heavy million never showed it — but batch writes, pool connections, and watch per-DB sqld CPU. The read side is a different story: 80/20 at a million statements, zero errors.</p>
+      <p>And in v1 the control plane itself has no login &mdash; on a public bind, put it behind a firewall or an authenticated reverse proxy.</p>
     </div>
   </div>
 </section>
@@ -382,7 +398,7 @@
     <div class="sec-h">
       <p class="kicker">Run it</p>
       <h2>One command. Under a minute. No root.</h2>
-      <p>The installer handles everything: Bun if missing, the repo, the pinned sqld binary (SHA-256 verified), the web build, and a <code>sqlitend</code> launcher in <code>~/.local/bin</code>. All data and keys live under <code>~/.local/share/sqlitend</code>.</p>
+      <p>The installer handles everything: Bun if missing, the repo, the pinned sqld binary (SHA-256 verified), the web build, and a <code>sqlitend</code> launcher in <code>~/.local/bin</code>. All data and keys live under <code>~/.local/share/sqlitend</code>. Upgrading later: re-run the same installer against a newer <code>SQLITEND_BRANCH</code>; when the pinned sqld version moves, the new checksum ships in <code>fetch-sqld.sh</code> (<a href="https://github.com/thaqiif/sqlitend/blob/main/docs/upgrade-sop.md" target="_blank" rel="noopener">upgrade SOP ↗</a>).</p>
     </div>
 
     <div class="install-box">
@@ -390,6 +406,8 @@
       <code>curl -fsSL https://raw.githubusercontent.com/thaqiif/sqlitend/main/scripts/install.sh | bash</code>
       <button class="copy" data-copy="curl -fsSL https://raw.githubusercontent.com/thaqiif/sqlitend/main/scripts/install.sh | bash">copy</button>
     </div>
+
+    <p class="verify">Before you pipe it: read <a href="https://github.com/thaqiif/sqlitend/blob/main/scripts/install.sh" target="_blank" rel="noopener">install.sh</a> and the per-OS sqld checksums pinned in <a href="https://github.com/thaqiif/sqlitend/blob/main/scripts/fetch-sqld.sh" target="_blank" rel="noopener">fetch-sqld.sh</a> &mdash; the installer verifies them on every run.</p>
 
     <div class="steps">
       <div class="step">
@@ -454,16 +472,16 @@ await c.execute("select * from users");</pre>
           <tr><td><span class="method m-get">GET</span></td><td><code>/api/system</code></td><td class="what">Version, sqld status, <code>publicHost</code>, workspace & database counts</td></tr>
           <tr><td><span class="method m-get">GET</span></td><td><code>/api/workspaces</code></td><td class="what">List workspaces</td></tr>
           <tr><td><span class="method m-post">POST</span></td><td><code>/api/workspaces</code></td><td class="what">Create a workspace — <code>{"name"}</code></td></tr>
-          <tr><td><span class="method m-del">DELETE</span></td><td><code>/api/workspaces/:id</code></td><td class="what">Delete a workspace and its databases</td></tr>
-          <tr><td><span class="method m-get">GET</span></td><td><code>/api/databases</code> · <code>/api/databases/:id</code></td><td class="what">List / inspect databases — status, port pair, url</td></tr>
+          <tr><td><span class="method m-del">DELETE</span></td><td><code>/api/workspaces/:id</code></td><td class="what">Delete a workspace &mdash; must be empty (409 otherwise); delete its databases first</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td><code>/api/databases</code> · <code>/api/databases/:id</code></td><td class="what">List / inspect databases — status, port pair (connection URLs via /connection)</td></tr>
           <tr><td><span class="method m-post">POST</span></td><td><code>/api/workspaces/:id/databases</code></td><td class="what">Create a database — spawns its supervised sqld</td></tr>
           <tr><td><span class="method m-post">POST</span></td><td><code>/api/databases/:id/start</code> · <code>/stop</code></td><td class="what">Start / stop the sqld process</td></tr>
           <tr><td><span class="method m-del">DELETE</span></td><td><code>/api/databases/:id</code></td><td class="what">Kill + remove the database and its data directory</td></tr>
           <tr><td><span class="method m-get">GET</span></td><td><code>/api/databases/:id/connection</code></td><td class="what">Live connection URL + current token for any client</td></tr>
           <tr><td><span class="method m-get">GET</span></td><td><code>/api/databases/:id/tokens</code></td><td class="what">List issued tokens</td></tr>
           <tr><td><span class="method m-post">POST</span></td><td><code>/api/databases/:id/tokens</code></td><td class="what">Mint a full-access token — <code>{"expiresInHours"}</code></td></tr>
-          <tr><td><span class="method m-del">DELETE</span></td><td><code>/api/databases/:id/tokens/:jti</code></td><td class="what">Revoke a token by its id</td></tr>
-          <tr><td><span class="method m-get">GET</span></td><td><code>/api/databases/:id/metrics</code></td><td class="what">Sampled per-second CPU / RSS / connections</td></tr>
+          <tr><td><span class="method m-del">DELETE</span></td><td><code>/api/databases/:id/tokens/:jti</code></td><td class="what">Revoke by jti &mdash; 501 in v1 (stateless JWT); use short TTLs or re-create the DB</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td><code>/api/databases/:id/metrics</code></td><td class="what">Sampled CPU / RSS / disk / uptime (5s default)</td></tr>
         </tbody>
       </table>
     </div>
@@ -488,14 +506,14 @@ await c.execute("select * from users");</pre>
       </div>
       <div class="foot-col">
         <h4>Docs</h4>
-        <a href="./killer-workflow.md">Killer workflow e2e</a>
-        <a href="./upgrade-sop.md">Upgrade SOP</a>
+        <a href="https://github.com/thaqiif/sqlitend/blob/main/docs/killer-workflow.md" target="_blank" rel="noopener">End-to-end checklist ↗</a>
+        <a href="https://github.com/thaqiif/sqlitend/blob/main/docs/upgrade-sop.md" target="_blank" rel="noopener">Upgrade SOP ↗</a>
         <a href="https://github.com/thaqiif/sqlitend#getting-started">README — getting started</a>
       </div>
     </div>
     <div class="foot-bottom">
       <span>Built and measured on a throwaway 1-vCPU aarch64 VM · Debian 13 · 969MB RAM · metrics captured 2026-09-06</span>
-      <span>Auth: per-DB Ed25519 keys · control plane binds 0.0.0.0 by default — firewall / ACL on public networks</span>
+      <span>Auth: per-DB Ed25519 keys · control plane binds 0.0.0.0 by default — firewall / ACL on public networks. On a public bind, hostname requests are rejected (DNS-rebinding guard).</span>
     </div>
   </div>
 </footer>
@@ -505,16 +523,20 @@ await c.execute("select * from users");</pre>
   document.querySelectorAll(".copy").forEach((btn) => {
     btn.addEventListener("click", () => {
       const txt = btn.dataset.copy || btn.getAttribute("data-copy");
-      const ok = () => { btn.textContent = "copied"; btn.classList.add("copied"); };
-      const fail = () => { btn.textContent = "select it"; };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(txt).then(ok, fail).catch(fail);
-      } else {
+      const shown = () => { btn.textContent = "copy"; btn.classList.remove("copied"); };
+      const ok = () => { btn.textContent = "copied"; btn.classList.add("copied"); setTimeout(shown, 1600); };
+      const legacy = () => {
         const ta = document.createElement("textarea");
         ta.value = txt; document.body.appendChild(ta); ta.select();
-        try { document.execCommand("copy"); ok(); } catch (err) { fail(); }
+        let okc = false;
+        try { okc = document.execCommand("copy"); } catch (err) { okc = false; }
         document.body.removeChild(ta);
-      }
+        if (okc) ok();
+        return okc;
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(ok).catch(() => { if (!legacy()) { btn.textContent = "select the command manually"; setTimeout(shown, 2000); } });
+      } else if (!legacy()) { btn.textContent = "select the command manually"; setTimeout(shown, 2000); }
     });
   });
 </script>
