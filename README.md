@@ -9,6 +9,10 @@ and watch live process-resource metrics.
 > **Killer workflow:** browse → create a database → get its connection URL + token → connect an
 > external client → view live metrics → delete — full round-trip in under a minute.
 
+**Landing page:** [thaqiif.github.io/sqlitend](https://thaqiif.github.io/sqlitend/) — what it is, how
+to run it, the complete API, and the published measurements (stress test, speedtest replication,
+million-statement run) with raw evidence.
+
 ## Runtime
 
 - **Bun** (>= 1.1). SQLite via `bun:sqlite`, Hono via `@hono/bun`, tests via `bun test`.

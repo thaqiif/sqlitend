@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sqlitend</title>
+<meta name="description" content="Self-hosted SQLite platform for libSQL/sqld: per-database Ed25519 keys, full-access tokens, REST API, live metrics, one-line install. Load-tested: 1M statements, 0 failures.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --paper: #F4F2EC;
+    --card: #FCFBF7;
+    --ink: #1C2622;
+    --ink-soft: #49544F;
+    --ink-faint: #6B756F;
+    --line: #E2DFD5;
+    --line-strong: #CBC7BA;
+    --petrol: #0E6B5C;
+    --petrol-deep: #0A4A40;
+    --amber: #B45309;
+    --amber-deep: #8A3E05;
+    --green: #157347;
+    --term: #0C2E28;
+    --term-line: #23453D;
+    --term-text: #D9E8E2;
+    --term-dim: #7FA39A;
+    --term-ok: #7FCEA8;
+    --term-warn: #E8A33D;
+    --focus: #0E6B5C;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--petrol); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:hover { color: var(--petrol-deep); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  code, pre, .mono { font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
+
+  /* ---------- nav ---------- */
+  .nav {
+    position: sticky; top: 0; z-index: 20;
+    background: rgba(244, 242, 236, .92);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav .in { display: flex; align-items: center; gap: 28px; height: 54px; }
+  .brand { font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 15px; color: var(--ink); text-decoration: none; letter-spacing: -0.02em; }
+  .brand:hover { color: var(--petrol); }
+  .brand .dot { color: var(--petrol); }
+  .nav .links { display: flex; gap: 20px; margin-left: auto; align-items: center; }
+  .nav a { font-size: 13px; font-weight: 500; color: var(--ink-soft); text-decoration: none; letter-spacing: .02em; }
+  .nav a:hover { color: var(--petrol); }
+  .nav .gh { font-family: "IBM Plex Mono", monospace; font-size: 12px; padding: 5px 10px; border: 1px solid var(--line-strong); color: var(--ink); border-radius: 2px; }
+  .nav .gh:hover { border-color: var(--petrol); color: var(--petrol); }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 64px 0 26px; border-bottom: 3px solid var(--ink); }
+  .kicker {
+    font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--petrol-deep); margin: 0 0 16px; display: flex; align-items: center; gap: 10px;
+  }
+  .kicker::before { content: ""; width: 14px; height: 14px; background: var(--petrol); display: inline-block; flex: none; }
+  .hero h1 {
+    font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
+    font-weight: 700; font-size: clamp(38px, 5.6vw, 64px);
+    line-height: 1.02; margin: 0 0 18px; letter-spacing: -0.01em; text-wrap: balance; max-width: 21ch;
+  }
+  .hero .lead { font-size: 17px; color: var(--ink-soft); max-width: 66ch; margin: 0 0 22px; }
+  .hero .lead strong { color: var(--ink); font-weight: 600; }
+  .cta-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 34px; }
+  .btn {
+    display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 13px; font-weight: 500;
+    padding: 11px 18px; text-decoration: none; border-radius: 2px; letter-spacing: .02em;
+  }
+  .btn-primary { background: var(--petrol); color: #fff; border: 1px solid var(--petrol); }
+  .btn-primary:hover { background: var(--petrol-deep); color: #fff; border-color: var(--petrol-deep); }
+  .btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--line-strong); }
+  .btn-ghost:hover { border-color: var(--petrol); color: var(--petrol); }
+
+  /* ---------- terminal ---------- */
+  .term {
+    background: var(--term); border: 1px solid var(--term-line); border-radius: 6px;
+    box-shadow: 0 14px 40px rgba(10, 40, 33, .14);
+    max-width: 860px; margin: 0 0 22px; overflow: hidden;
+  }
+  .term .bar { display: flex; align-items: center; gap: 6px; padding: 9px 14px; border-bottom: 1px solid var(--term-line); background: rgba(255,255,255,.02); }
+  .term .bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--term-line); display: inline-block; }
+  .term .bar i:nth-of-type(1) { background: #C96A5A; }
+  .term .bar i:nth-of-type(2) { background: #C9A55A; }
+  .term .bar i:nth-of-type(3) { background: #74B087; }
+  .term .bar span { margin-left: 8px; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--term-dim); }
+  .term pre { margin: 0; padding: 18px 20px 20px; overflow-x: auto; color: var(--term-text); font-size: 13px; line-height: 1.72; }
+  .term .p { color: var(--term-warn); font-weight: 600; }
+  .term .path { color: var(--term-text); font-weight: 500; }
+  .term .ok { color: var(--term-ok); }
+  .term .dim { color: var(--term-dim); }
+  .term .tn { display: block; animation: tnin .5s ease both; }
+  .term .tn:nth-child(1) { animation-delay: .05s; }
+  .term .tn:nth-child(2) { animation-delay: .35s; }
+  .term .tn:nth-child(3) { animation-delay: .65s; }
+  .term .tn:nth-child(4) { animation-delay: .95s; }
+  .term .tn:nth-child(5) { animation-delay: 1.25s; }
+  .term .tn:nth-child(6) { animation-delay: 1.55s; }
+  .term .tn:nth-child(7) { animation-delay: 1.85s; }
+  .term .tn:nth-child(8) { animation-delay: 2.15s; }
+  @keyframes tnin { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+  .caret { display: inline-block; width: 8px; height: 14px; background: var(--term-warn); vertical-align: -2px; margin-left: 2px; animation: blink 1.06s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .term-foot { display: flex; gap: 22px; flex-wrap: wrap; justify-content: space-between; align-items: baseline; border-top: 1px solid var(--term-line); padding: 10px 14px; background: rgba(255,255,255,.03); }
+  .term-foot span { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--term-dim); }
+
+  /* ---------- specstrip ---------- */
+  .specstrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 26px; padding: 22px 0 30px; }
+  .spec { border-left: 2px solid var(--petrol); padding-left: 12px; }
+  .spec .k { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint); display: block; }
+  .spec .v { font-family: "IBM Plex Mono", monospace; font-size: 14px; font-weight: 500; color: var(--ink); display: block; margin-top: 3px; }
+
+  /* ---------- sections ---------- */
+  section { padding: 62px 0 8px; border-bottom: 1px solid var(--line); }
+  section:last-of-type { border-bottom: none; }
+  .sec-h { max-width: 72ch; margin: 0 0 34px; }
+  .sec-h h2 { font-family: "IBM Plex Sans Condensed", sans-serif; font-weight: 700; font-size: clamp(26px, 3.4vw, 36px); line-height: 1.1; margin: 8px 0 10px; letter-spacing: -0.01em; text-wrap: balance; }
+  .sec-h p { color: var(--ink-soft); margin: 0; max-width: 64ch; }
+  .sec-h .kicker { margin-bottom: 8px; }
+
+  /* ---------- why / features ---------- */
+  .why { display: grid; grid-template-columns: 1.05fr 1fr; gap: 44px; align-items: start; }
+  .why .nar { max-width: 58ch; }
+  .why .nar p { margin: 0 0 16px; color: var(--ink-soft); }
+  .why .nar p:first-child { color: var(--ink); font-size: 17px; line-height: 1.55; }
+  .feats { display: flex; flex-direction: column; gap: 14px; }
+  .feat { background: var(--card); border: 1px solid var(--line); padding: 16px 18px 15px; }
+  .feat h3 { margin: 0 0 5px; font-size: 15px; font-weight: 600; }
+  .feat p { margin: 0; font-size: 13.5px; color: var(--ink-soft); line-height: 1.55; }
+  .feat code { font-size: 12px; background: var(--paper); padding: 1px 4px; border: 1px solid var(--line); border-radius: 2px; }
+
+  /* ---------- proof ---------- */
+  .proof-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .report { background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--petrol); padding: 22px 20px 20px; display: flex; flex-direction: column; }
+  .report .n { font-family: "IBM Plex Sans Condensed", sans-serif; font-weight: 700; font-size: clamp(40px, 5vw, 56px); line-height: 1; letter-spacing: -0.02em; color: var(--ink); }
+  .report .n em { font-style: normal; font-size: .42em; color: var(--ink-faint); font-family: "IBM Plex Mono", monospace; font-weight: 500; }
+  .report h3 { margin: 6px 0 8px; font-size: 17px; font-weight: 600; }
+  .report .meta { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--petrol); order: -1; }
+  .report ul { margin: 8px 0 14px; padding-left: 18px; font-size: 13.5px; color: var(--ink-soft); }
+  .report li { margin-bottom: 5px; }
+  .report .go { margin-top: auto; font-weight: 600; text-decoration: none; border-top: 1px solid var(--line); padding-top: 12px; display: block; font-size: 13.5px; }
+  .report .go:hover { color: var(--petrol-deep); }
+  .report .go::after { content: " →"; font-family: "IBM Plex Mono", monospace; }
+
+  .gate { margin-top: 28px; background: var(--ink); color: var(--paper); padding: 18px 22px; display: flex; flex-wrap: wrap; gap: 16px 34px; align-items: center; }
+  .gate .g { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--paper); }
+  .gate .g b { font-size: 15px; color: #fff; margin-right: 6px; }
+  .gate .g span { color: var(--term-dim); }
+  .gate .sep { color: var(--term-line); }
+
+  .caveat { margin-top: 22px; background: #FBF0E3; border: 1px solid #E5CFA8; border-left: 3px solid var(--amber); padding: 18px 20px; }
+  .caveat h3 { margin: 0 0 8px; font-size: 14.5px; font-weight: 600; color: var(--amber-deep); font-family: "IBM Plex Mono", monospace; letter-spacing: .06em; text-transform: uppercase; }
+  .caveat p { margin: 0 0 8px; font-size: 13.5px; color: var(--ink-soft); max-width: 86ch; }
+  .caveat p:last-child { margin-bottom: 0; }
+  .caveat code { font-size: 12px; background: #fff; padding: 1px 4px; border: 1px solid #E5CFA8; border-radius: 2px; }
+
+  /* ---------- run ---------- */
+  .install-box { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: var(--term); border: 1px solid var(--term-line); border-radius: 4px; padding: 14px 16px; margin-bottom: 30px; }
+  .install-box code { color: var(--term-text); font-size: 13.5px; overflow-x: auto; white-space: nowrap; flex: 1 1 auto; }
+  .install-box .tag { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--term-dim); letter-spacing: .08em; text-transform: uppercase; }
+  .copy { font-family: "IBM Plex Mono", monospace; font-size: 12px; background: transparent; border: 1px solid var(--term-line); color: var(--term-ok); padding: 7px 12px; border-radius: 2px; cursor: pointer; }
+  .copy:hover { border-color: var(--term-ok); }
+  .copy.copied { border-color: var(--term-ok); }
+
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .step { border-top: 2px solid var(--line-strong); padding-top: 12px; }
+  .step .no { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--petrol); font-weight: 600; }
+  .step h3 { margin: 2px 0 8px; font-size: 15px; font-weight: 600; }
+  .step p { margin: 0 0 10px; font-size: 13px; color: var(--ink-soft); }
+  .step pre { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 3px; padding: 10px 12px; font-size: 12px; overflow-x: auto; line-height: 1.55; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+  .step pre .c { color: var(--ink-faint); }
+
+  .env { margin-top: 30px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .env-row { display: flex; gap: 12px; align-items: baseline; border-bottom: 1px dashed var(--line); padding-bottom: 8px; }
+  .env-row code { font-size: 12.5px; font-weight: 500; color: var(--ink); flex: none; }
+  .env-row span { font-size: 12.5px; color: var(--ink-soft); }
+
+  /* ---------- api ---------- */
+  .api-table { overflow-x: auto; border: 1px solid var(--line); background: var(--card); }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; }
+  th { text-align: left; font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint); padding: 10px 14px; border-bottom: 2px solid var(--line-strong); background: var(--card); }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 13.5px; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td code { font-size: 12.5px; font-weight: 500; }
+  .method { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; font-weight: 600; letter-spacing: .08em; padding: 3px 7px; border-radius: 2px; display: inline-block; min-width: 34px; text-align: center; }
+  .m-get { color: #0E6B5C; background: #E3EFEB; border: 1px solid #BFD9D1; }
+  .m-post { color: #8A3E05; background: #F6E8D8; border: 1px solid #E5CFA8; }
+  .m-del { color: #7C2A2A; background: #F3E3E1; border: 1px solid #DFC7C2; }
+  .api-table .what { color: var(--ink-soft); }
+  .api-note { margin-top: 12px; font-size: 13px; color: var(--ink-faint); }
+
+  /* ---------- footer ---------- */
+  footer { background: var(--term); color: var(--term-text); margin-top: 60px; }
+  .foot-in { max-width: 1120px; margin: 0 auto; padding: 46px 28px 40px; }
+  .foot-grid { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 34px; }
+  .foot-brand { font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 16px; color: #fff; margin: 0 0 8px; }
+  .foot-brand .dot { color: var(--term-warn); }
+  .foot-tag { color: var(--term-dim); font-size: 13px; margin: 0 0 14px; max-width: 44ch; }
+  .foot-col h4 { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--term-dim); margin: 0 0 12px; }
+  .foot-col a { display: block; color: var(--term-text); text-decoration: none; font-size: 13.5px; margin-bottom: 8px; }
+  .foot-col a:hover { color: #fff; }
+  .foot-bottom { border-top: 1px solid var(--term-line); margin-top: 30px; padding-top: 16px; display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: space-between; color: var(--term-dim); font-size: 12px; }
+  .foot-bottom a { color: var(--term-dim); }
+
+  @media (max-width: 900px) {
+    .why { grid-template-columns: 1fr; }
+    .proof-grid { grid-template-columns: 1fr; }
+    .steps { grid-template-columns: 1fr 1fr; }
+    .foot-grid { grid-template-columns: 1fr 1fr; gap: 24px; }
+  }
+  @media (max-width: 560px) {
+    .steps { grid-template-columns: 1fr; }
+    .foot-grid { grid-template-columns: 1fr; }
+    .nav .links a:not(.gh) { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .term .tn { animation: none; }
+    .caret { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= NAV ================= -->
+<nav class="nav"><div class="wrap in">
+  <a class="brand" href="#top">sqlitend<span class="dot">.</span></a>
+  <div class="links">
+    <a href="#proof">Proof</a>
+    <a href="#run">Run it</a>
+    <a href="#api">API</a>
+    <a href="#notes">Notes</a>
+    <a class="gh" href="https://github.com/thaqiif/sqlitend" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
+</div></nav>
+
+<!-- ================= HERO ================= -->
+<header class="hero" id="top">
+  <div class="wrap">
+    <p class="kicker">Self-hosted SQLite platform · libSQL / sqld · one operator</p>
+    <h1>A private SQLite platform on your own box.</h1>
+    <p class="lead">sqlitend runs <strong>sqld</strong> (libSQL's embeddable server) as plain subprocesses on the machine you already have — no containers, no cluster, no vendor. Create a database, get a connection URL and a token, and point any libSQL client at it. <strong>The whole round trip takes under a minute.</strong></p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#run">Run it in one line</a>
+      <a class="btn btn-ghost" href="#proof">See the measurements</a>
+    </div>
+
+    <div class="term">
+      <div class="bar"><i></i><i></i><i></i><span>sqlitend · the killer workflow, end to end</span></div>
+      <pre><span class="tn"><span class="p">$</span> <span class="path">curl -fsSL https://raw.githubusercontent.com/thaqiif/sqlitend/main/scripts/install.sh | bash</span></span>
+<span class="tn">&nbsp;&nbsp;<span class="ok">✔</span> <span class="dim">Bun · repo · pinned sqld (SHA-256) · web UI built</span> <span class="dim">≈ 1 min</span></span>
+<span class="tn"><span class="p">$</span> <span class="path">~/.local/bin/sqlitend</span></span>
+<span class="tn">&nbsp;&nbsp;<span class="ok">✔</span> <span class="dim">control plane on </span><span class="path">http://0.0.0.0:6100</span> <span class="dim">— public by default</span></span>
+<span class="tn"><span class="p">$</span> <span class="path">curl -s -X POST :6100/api/workspaces -d '{"name":"labs"}'</span></span>
+<span class="tn">&nbsp;&nbsp;<span class="ok">✔</span> <span class="dim">workspace labs · id </span><span class="path">8ec2…</span></span>
+<span class="tn"><span class="p">$</span> <span class="path">curl -s -X POST :6100/api/workspaces/8ec2…/databases -d '{"name":"users"}'</span></span>
+<span class="tn">&nbsp;&nbsp;<span class="ok">✔</span> <span class="dim">database users → sqld on :6121 · </span><span class="path">ws://&lt;public-host>:6121</span></span>
+<span class="tn"><span class="p">$</span> <span class="path">curl -s -X POST :6100/api/databases/…/tokens -d '{"expiresInHours":24}'</span></span>
+<span class="tn">&nbsp;&nbsp;<span class="ok">✔</span> <span class="dim">token issued · full access · 24h TTL</span></span>
+<span class="tn"><span class="p">$</span> <span class="path">bun -e 'import { createClient } from "@libsql/client"; …'</span> <span class="caret"></span></span></pre>
+      <div class="term-foot">
+        <span>bind 0.0.0.0 · per-DB keys · tokens · REST API · metrics</span>
+        <span>1-vCPU VM · Bun 1.4.2 · sqld 0.24.32</span>
+      </div>
+    </div>
+
+    <div class="specstrip">
+      <div class="spec"><span class="k">Runtime</span><span class="v">Bun ≥ 1.1 · Hono · React</span></div>
+      <div class="spec"><span class="k">Engine</span><span class="v">sqld 0.24.32 pinned</span></div>
+      <div class="spec"><span class="k">Default bind</span><span class="v">0.0.0.0 · DNS-rebind safe</span></div>
+      <div class="spec"><span class="k">Deploy</span><span class="v">one-line · no root</span></div>
+    </div>
+  </div>
+</header>
+
+<!-- ================= WHY ================= -->
+<section id="why">
+  <div class="wrap">
+    <div class="sec-h">
+      <p class="kicker">What it is</p>
+      <h2>SQLite scale-out isn't the point.<br>Being able to self-host it is.</h2>
+      <p>SQLite is the most deployed database in the world, and sqld turns each one into a real network server: Hrana over ws://, HTTP, live replicas. The piece everyone was missing is the boring operator — something to create, run, secure, monitor, and retire databases without standing up yet-another-control-plane. sqlitend is that operator: one per machine, REST on the front, plain directories on disk.</p>
+    </div>
+
+    <div class="why">
+      <div class="nar">
+        <p>Point a libSQL client at a URL and a database answers — exactly like a hosted service, except the data never leaves your box and nothing in the stack is bigger than one binary and one Bun process.</p>
+        <p>Every database gets its own sqld process on the pinned, SHA-256-verified binary. The control plane supervises it: launch, ready-probe, crash detection, restart adoption, clean delete. A database is a first-class object with an id, a data directory, a port pair, and metrics — not a container you have to feed.</p>
+        <p>Before this page existed, sqlitend was load-tested and reviewer-gated. The numbers are below, with raw evidence published next to each report.</p>
+      </div>
+      <div class="feats">
+        <div class="feat"><h3>Isolation by key, not by folder</h3><p>Each database owns an <code>Ed25519</code> signing keypair. Tokens are signed per-database — a token for <code>users</code> is rejected by <code>orders</code>. Cross-DB access is <em>cryptographically</em> impossible, not just policy.</p></div>
+        <div class="feat"><h3>Full-access tokens with a lifespan</h3><p>Issue <code>full</code>-scope tokens that expire (24h default), revoke by <code>jti</code>. No shared platform password. sqld v1 is full-access-only — the UI never pretends otherwise.</p></div>
+        <div class="feat"><h3>Subprocesses, not containers</h3><p>No Docker daemon, no orchestration. The pinned binary runs supervised under the control plane — crash recovery and restart adoption included. The whole platform is a couple of processes.</p></div>
+        <div class="feat"><h3>Live per-database metrics</h3><p>Per-DB CPU and RSS sampled straight from <code>/proc</code>, served to the dashboard and to <code>/api/databases/:id/metrics</code>. See a hot database before your users do.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PROOF ================= -->
+<section id="proof">
+  <div class="wrap">
+    <div class="sec-h">
+      <p class="kicker">The measurements</p>
+      <h2>Measured, not marketed.</h2>
+      <p>Every number below was run against the real product on a throwaway <strong>1-vCPU / 969MB / aarch64</strong> VM (Debian 13) on 2026-09-06, and cross-checked against the raw evidence file published next to each report. No synthetic cloud box, no pre-warmed benchmark cluster — the smallest machine this platform will ever be run on.</p>
+    </div>
+
+    <div class="proof-grid">
+      <div class="report">
+        <span class="meta">Stress test</span>
+        <div class="n">2,240,800<em> ops · 0 failures</em></div>
+        <h3>The One-Gigabyte Test</h3>
+        <ul>
+          <li>2 workspaces × 10 databases = 20 DBs</li>
+          <li>200,000 rows seeded at ~10k rows/s per DB</li>
+          <li>8-round mixed CRUD hammer; COUNT(*) exact on every DB</li>
+          <li>Destroy phase clean — no orphaned dirs, no leaks</li>
+        </ul>
+        <a class="go" href="./stress-report.html">Full stress report</a>
+      </div>
+
+      <div class="report">
+        <span class="meta">Benchmark</span>
+        <div class="n">17.4×<em> network vs embedded</em></div>
+        <h3>The Speedtest Replication</h3>
+        <ul>
+          <li>Official SQLite speedtest1 (3.53.4): <strong>TOTAL 6.494s</strong> on this box</li>
+          <li>Statement-level port: embedded 483ms vs sqlitend/sqld 8,385ms</li>
+          <li>The honest per-statement network tax — 1,000-row batches collapse it to 3.4×</li>
+        </ul>
+        <a class="go" href="./spd-report.html">Full benchmark report</a>
+      </div>
+
+      <div class="report">
+        <span class="meta">Concurrency</span>
+        <div class="n">1,000,000<em> statements · 0 failures</em></div>
+        <h3>The Million-Statement Run</h3>
+        <ul>
+          <li>Read-heavy 80/20, 4 clients, over loopback Hrana</li>
+          <li><strong>1,500/s</strong> mean · p50 2ms / p95 6ms / p99 11ms</li>
+          <li>Host peaked at 357MB RAM · sqld RSS only 42MB</li>
+          <li>26 BUSY retries (0.0026%) — the client retried, the DB never dropped one</li>
+        </ul>
+        <a class="go" href="./spd-conc-report.html">Full concurrency report</a>
+      </div>
+    </div>
+
+    <div class="gate">
+      <span class="g"><b>82</b> tests passing <span>· bun test</span></span>
+      <span class="g"><b>5 / 5</b> reviewer PASS <span>· security · reliability · frontend · tests · ops</span></span>
+      <span class="g"><b>0</b> type errors <span>· tsc --noEmit, server + web</span></span>
+      <span class="g"><b>≈ 4s</b> e2e killer workflow <span>· create → connect → delete</span></span>
+      <span class="g"><b>0</b> regressions <span>· prod-readiness gate 2026-09-06</span></span>
+    </div>
+
+    <div class="caveat" id="notes">
+      <h3>Know your writer</h3>
+      <p>sqld is <strong>single-writer</strong>. Aggregate write throughput is flat at ~2.2k/s from 1 to 4 clients on one core, declines past 8, and thrashes beyond 16 — that is sqld's design, not a bug in sqlitend. The lever is batching: 1,000-row inserts close the network gap from 17.4× to 3.4×.</p>
+      <p>One finding worth knowing before write-heavy HA: a sustained write-heavy run left the benchmark sqld process busy-spining at <strong>100% CPU with zero clients attached</strong> (host load ~56 on one core). It killed cleanly, and the read-heavy million never showed it — but batch writes, pool connections, and watch per-DB sqld CPU. The read side is a different story: 80/20 at a million statements, zero errors.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= RUN ================= -->
+<section id="run">
+  <div class="wrap">
+    <div class="sec-h">
+      <p class="kicker">Run it</p>
+      <h2>One command. Under a minute. No root.</h2>
+      <p>The installer handles everything: Bun if missing, the repo, the pinned sqld binary (SHA-256 verified), the web build, and a <code>sqlitend</code> launcher in <code>~/.local/bin</code>. All data and keys live under <code>~/.local/share/sqlitend</code>.</p>
+    </div>
+
+    <div class="install-box">
+      <span class="tag">install</span>
+      <code>curl -fsSL https://raw.githubusercontent.com/thaqiif/sqlitend/main/scripts/install.sh | bash</code>
+      <button class="copy" data-copy="curl -fsSL https://raw.githubusercontent.com/thaqiif/sqlitend/main/scripts/install.sh | bash">copy</button>
+    </div>
+
+    <div class="steps">
+      <div class="step">
+        <span class="no">01</span>
+        <h3>Install</h3>
+        <p>One line, about a minute. Options: <code>SQLITEND_BRANCH</code>, <code>SQLITEND_INSTALL_DIR</code>, <code>SQLITEND_SYSTEMD=1</code> for a systemd user service.</p>
+        <pre><span class="c"># terminal</span>
+curl -fsSL …/scripts/install.sh | bash</pre>
+      </div>
+      <div class="step">
+        <span class="no">02</span>
+        <h3>Start</h3>
+        <p>Control plane binds <code>0.0.0.0:6100</code> by default — reach it from any interface on the LAN/VPN. <code>SQLITEND_HOST=127.0.0.1</code> goes local-only.</p>
+        <pre><span class="c"># terminal</span>
+~/.local/bin/sqlitend</pre>
+      </div>
+      <div class="step">
+        <span class="no">03</span>
+        <h3>Create + token</h3>
+        <p>Workspace → database → token via REST (or the dashboard at <code>:6100</code>). The API table below is the whole surface.</p>
+        <pre>POST /api/workspaces          {"name":"labs"}
+POST /api/workspaces/:id/databases {"name":"users"}
+POST /api/databases/:id/tokens {"expiresInHours":24}</pre>
+      </div>
+      <div class="step">
+        <span class="no">04</span>
+        <h3>Connect</h3>
+        <p>Any libSQL client. Set <code>SQLITEND_PUBLIC_HOST</code> so advertised URLs point at your machine, not loopback.</p>
+        <pre><span class="c">// any libSQL client</span>
+const c = createClient({
+  url: "libsql://&lt;host>:6121",
+  authToken: token,
+});
+await c.execute("select * from users");</pre>
+      </div>
+    </div>
+
+    <div class="env">
+      <div class="env-row"><code>SQLITEND_HOST</code><span>bind address — 0.0.0.0 default</span></div>
+      <div class="env-row"><code>SQLITEND_PUBLIC_HOST</code><span>host advertised in connection URLs</span></div>
+      <div class="env-row"><code>SQLITEND_PORT_RANGE</code><span>per-DB http+grpc pair · 6101-6300</span></div>
+      <div class="env-row"><code>SQLITEND_DATA_ROOT</code><span>data root · ~/.local/share/sqlitend</span></div>
+      <div class="env-row"><code>SQLITEND_TOKEN_TTL_HOURS</code><span>default token lifetime · 24h</span></div>
+      <div class="env-row"><code>SQLITEND_SAMPLE_INTERVAL_MS</code><span>metrics sample + poll interval</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= API ================= -->
+<section id="api">
+  <div class="wrap">
+    <div class="sec-h">
+      <p class="kicker">Explore the API</p>
+      <h2>The whole control plane is one REST surface.</h2>
+      <p>JSON in, JSON out. Every mutating call is validated with zod — strict 400s, no silent defaults. This table is the complete route surface.</p>
+    </div>
+
+    <div class="api-table">
+      <table>
+        <thead><tr><th>Method</th><th>Path</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><span class="method m-get">GET</span></td><td><code>/api/system</code></td><td class="what">Version, sqld status, <code>publicHost</code>, workspace & database counts</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td><code>/api/workspaces</code></td><td class="what">List workspaces</td></tr>
+          <tr><td><span class="method m-post">POST</span></td><td><code>/api/workspaces</code></td><td class="what">Create a workspace — <code>{"name"}</code></td></tr>
+          <tr><td><span class="method m-del">DELETE</span></td><td><code>/api/workspaces/:id</code></td><td class="what">Delete a workspace and its databases</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td><code>/api/databases</code> · <code>/api/databases/:id</code></td><td class="what">List / inspect databases — status, port pair, url</td></tr>
+          <tr><td><span class="method m-post">POST</span></td><td><code>/api/workspaces/:id/databases</code></td><td class="what">Create a database — spawns its supervised sqld</td></tr>
+          <tr><td><span class="method m-post">POST</span></td><td><code>/api/databases/:id/start</code> · <code>/stop</code></td><td class="what">Start / stop the sqld process</td></tr>
+          <tr><td><span class="method m-del">DELETE</span></td><td><code>/api/databases/:id</code></td><td class="what">Kill + remove the database and its data directory</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td><code>/api/databases/:id/connection</code></td><td class="what">Live connection URL + current token for any client</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td><code>/api/databases/:id/tokens</code></td><td class="what">List issued tokens</td></tr>
+          <tr><td><span class="method m-post">POST</span></td><td><code>/api/databases/:id/tokens</code></td><td class="what">Mint a full-access token — <code>{"expiresInHours"}</code></td></tr>
+          <tr><td><span class="method m-del">DELETE</span></td><td><code>/api/databases/:id/tokens/:jti</code></td><td class="what">Revoke a token by its id</td></tr>
+          <tr><td><span class="method m-get">GET</span></td><td><code>/api/databases/:id/metrics</code></td><td class="what">Sampled per-second CPU / RSS / connections</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="api-note">Web dashboard: same data at <code>:6100</code>, served by the same backend through the API proxy.</p>
+  </div>
+</section>
+
+<!-- ================= FOOTER ================= -->
+<footer>
+  <div class="foot-in">
+    <div class="foot-grid">
+      <div>
+        <p class="foot-brand">sqlitend<span class="dot">.</span></p>
+        <p class="foot-tag">A single-operator, self-hosted management platform for libSQL / sqld. Mostly SQLite, entirely under your control.</p>
+        <p><a href="https://github.com/thaqiif/sqlitend" target="_blank" rel="noopener">GitHub ↗</a> · <a href="https://raw.githubusercontent.com/thaqiif/sqlitend/main/scripts/install.sh">install.sh</a></p>
+      </div>
+      <div class="foot-col">
+        <h4>Reports</h4>
+        <a href="./stress-report.html">The One-Gigabyte Test</a>
+        <a href="./spd-report.html">The Speedtest Replication</a>
+        <a href="./spd-conc-report.html">The Million-Statement Run</a>
+      </div>
+      <div class="foot-col">
+        <h4>Docs</h4>
+        <a href="./killer-workflow.md">Killer workflow e2e</a>
+        <a href="./upgrade-sop.md">Upgrade SOP</a>
+        <a href="https://github.com/thaqiif/sqlitend#getting-started">README — getting started</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>Built and measured on a throwaway 1-vCPU aarch64 VM · Debian 13 · 969MB RAM · metrics captured 2026-09-06</span>
+      <span>Auth: per-DB Ed25519 keys · control plane binds 0.0.0.0 by default — firewall / ACL on public networks</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // copy the one-liner
+  document.querySelectorAll(".copy").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const txt = btn.dataset.copy || btn.getAttribute("data-copy");
+      const ok = () => { btn.textContent = "copied"; btn.classList.add("copied"); };
+      const fail = () => { btn.textContent = "select it"; };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(ok, fail).catch(fail);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = txt; document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); ok(); } catch (err) { fail(); }
+        document.body.removeChild(ta);
+      }
+    });
+  });
+</script>
+</body>
+</html>
