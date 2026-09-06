@@ -14,7 +14,7 @@ export interface PortRange {
 }
 
 export interface Config {
-  /** Control-plane listener bind address (host is fixed to 127.0.0.1). */
+  /** Control-plane listener bind address (default 0.0.0.0 — all interfaces). */
   port: number;
   host: string;
   /** Range from which http+grpc port PAIRS are allocated per database. */
@@ -33,7 +33,7 @@ export interface Config {
   maxBodyBytes: number;
 }
 
-const DEFAULT_HOST = "127.0.0.1";
+const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 6100;
 const DEFAULT_PORT_RANGE: PortRange = { start: 6101, end: 6300 };
 const DEFAULT_TOKEN_TTL_HOURS = 24;
@@ -71,9 +71,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     ? env.SQLITEND_DATA_ROOT
     : path.join(os.homedir(), ".local", "share", "sqlitend");
 
+  const host = env.SQLITEND_HOST && env.SQLITEND_HOST.trim().length > 0
+    ? env.SQLITEND_HOST.trim()
+    : DEFAULT_HOST;
+
   return {
     port,
-    host: DEFAULT_HOST,
+    host,
     portRange: env.SQLITEND_PORT_RANGE ? parsePortRange(env.SQLITEND_PORT_RANGE) : DEFAULT_PORT_RANGE,
     dataRoot,
     sqldPath: (env.SQLITEND_SQLD_PATH && env.SQLITEND_SQLD_PATH.length > 0)

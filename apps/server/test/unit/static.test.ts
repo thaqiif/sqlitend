@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createStaticHandler } from "../../src/http/static.ts";
+import { createStaticHandler, isAllowedHost } from "../../src/http/static.ts";
 
 const dirs: string[] = [];
 function dist(): string {
@@ -49,5 +49,39 @@ describe("static handler", () => {
     const res = serve("/some/client/route");
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("sqlitend");
+  });
+});
+
+describe("isAllowedHost (DNS-rebinding guard)", () => {
+  test("loopback aliases are always allowed", () => {
+    for (const h of ["127.0.0.1:6100", "localhost:6100", "[::1]:6100"]) {
+      expect(isAllowedHost(h, 6100, "0.0.0.0")).toBe(true);
+      expect(isAllowedHost(h, 6100, "127.0.0.1")).toBe(true);
+    }
+  });
+
+  test("public IP literal works when bound to 0.0.0.0 but not when loopback-only", () => {
+    // Direct-address access (Tailscale/LAN IP, IPv4 and IPv6) must pass when
+    // the listener is public…
+    expect(isAllowedHost("100.97.250.76:6100", 6100, "0.0.0.0")).toBe(true);
+    expect(isAllowedHost("[2001:db8::1]:6100", 6100, "0.0.0.0")).toBe(true);
+    // …but if the operator restricted the bind, the same request is refused.
+    expect(isAllowedHost("100.97.250.76:6100", 6100, "127.0.0.1")).toBe(false);
+  });
+
+  test("DNS hostnames never pass, even when bound publicly (rebinding protection)", () => {
+    expect(isAllowedHost("evil.example:6100", 6100, "0.0.0.0")).toBe(false);
+    expect(isAllowedHost("sqlitend.test:6100", 6100, "0.0.0.0")).toBe(false);
+    expect(isAllowedHost("evil.example:6100", 6100, "sqlitend.test")).toBe(false);
+  });
+
+  test("the configured bind hostname is allowed as itself", () => {
+    expect(isAllowedHost("sqlitend.test:6100", 6100, "sqlitend.test")).toBe(true);
+  });
+
+  test("malformed/octet-overflow IPv4 literals are not IP literals", () => {
+    expect(isAllowedHost("999.1.1.1:6100", 6100, "0.0.0.0")).toBe(false);
+    expect(isAllowedHost("1.2.3:6100", 6100, "0.0.0.0")).toBe(false);
+    expect(isAllowedHost("not-an-ip:6100", 6100, "0.0.0.0")).toBe(false);
   });
 });

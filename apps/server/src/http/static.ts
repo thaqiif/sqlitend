@@ -64,11 +64,29 @@ function htmlFallback(dist: string): Response {
 }
 
 /**
- * Host allowlist for the API surface: the control plane binds 127.0.0.1 and
- * must only accept requests addressed to it (blocks DNS-rebinding, where an
- * attacker page fetches `http://evil.example:<port>/api/...` — that request
- * arrives with attacker-controlled Host but still hits our listener).
+ * Host allowlist for the API surface, sized to the listener's bind address.
+ *
+ * Loopback aliases are always allowed. When the listener binds publicly
+ * (0.0.0.0 / ::) the real machine address can vary (DHCP, Tailscale, …), so we
+ * additionally accept IP-literal Hosts and the configured listen host. DNS
+ * names are deliberately NOT allowed: a rebinding attack (a page fetching
+ * `http://evil.example:<port>/api/...` — attacker-controlled Host that still
+ * reaches our listener) needs a hostname, and an IP-literal Host has no DNS to
+ * rebound.
  */
-export function isAllowedHost(host: string, port: number): boolean {
-  return host === `127.0.0.1:${port}` || host === `localhost:${port}` || host === `[::1]:${port}`;
+export function isAllowedHost(host: string, port: number, listenHost: string): boolean {
+  const hostname = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
+  if (hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1") return true;
+  if (listenHost === "0.0.0.0" || listenHost === "::" || listenHost === "*") {
+    return hostname === listenHost.toLowerCase() || isIpLiteral(hostname);
+  }
+  return hostname === listenHost.toLowerCase();
+}
+
+/** IPv4 dotted quad, or an IPv6 literal (contains a colon). */
+function isIpLiteral(h: string): boolean {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) {
+    return h.split(".").every((o) => Number(o) <= 255);
+  }
+  return h.includes(":");
 }

@@ -129,7 +129,7 @@ const server = Bun.serve({
       // Host allowlist: the API answers only when addressed as this listener
       // (defeats DNS-rebinding, where the attacker's page reaches our socket
       // but presents their own hostname).
-      if (!isAllowedHost(url.host, config.port)) return new Response("Forbidden", { status: 403 });
+      if (!isAllowedHost(url.host, config.port, config.host)) return new Response("Forbidden", { status: 403 });
       // Browser-initiated cross-site requests announce themselves via
       // Sec-Fetch-Site (Chrome/Edge/Firefox); allow same-origin + direct tools.
       const sfs = req.headers.get("sec-fetch-site");

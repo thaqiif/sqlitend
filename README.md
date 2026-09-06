@@ -63,7 +63,8 @@ bun run dev
 
 All settings via environment variables (see [`.env.example`](.env.example)):
 
-- `SQLITEND_PORT` – control plane listener (default `6100`)
+- `SQLITEND_PORT` – control plane listener port (default `6100`)
+- `SQLITEND_HOST` – bind address (`0.0.0.0` = all interfaces, the default; `127.0.0.1` = localhost only)
 - `SQLITEND_PORT_RANGE` – http+grpc port pair range per DB (default `6101-6300`)
 - `SQLITEND_DATA_ROOT` – data root (`~/.local/share/sqlitend` default)
 - `SQLITEND_SQLD_PATH` – path to the sqld binary (`<repo>/bin/sqld` default)
@@ -71,6 +72,18 @@ All settings via environment variables (see [`.env.example`](.env.example)):
 - `SQLITEND_SAMPLE_INTERVAL_MS` – metrics sampler + UI poll interval in MILLISECONDS (250–600000, default `5000`)
 - `SQLITEND_READY_TIMEOUT_MS` – sqld launch ready probe timeout in MILLISECONDS (500–120000, default `10000`)
 - `SQLITEND_MAX_BODY_BYTES` – maximum accepted JSON body size for mutating API calls, in bytes (default `1000000`)
+
+### Control-plane access
+
+The control plane (web UI + API) binds **`0.0.0.0` by default** — reachable on any interface
+(e.g. `http://<machine-ip>:6100`). Set `SQLITEND_HOST=127.0.0.1` to restrict it to localhost.
+
+The API answers only requests addressed to its listener **by IP or the configured host**; DNS
+hostnames are refused (`403`), which blocks DNS-rebinding attacks. The management surface itself
+has **no login in v1** — anyone who can reach the listener can manage workspaces/databases and
+mint database tokens — so on a public network put it behind a firewall, an authenticated reverse
+proxy, or a Tailscale ACL. The per-database sqld tokens (see [Auth note](#auth-note)) protect
+*data access*, not the control plane.
 
 ## Provisioning
 
