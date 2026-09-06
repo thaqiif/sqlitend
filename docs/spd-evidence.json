@@ -1,0 +1,28 @@
+{
+  "captured": "2026-09-06T15:56:00Z",
+  "host": { "cpu": "1 vCPU", "ramMb": 969, "platform": "Linux aarch64 (Debian 13)", "name": "sqlitendtest" },
+  "officialSpeedtest1": {
+    "sqlite": "3.53.4 (2026-07-24, amalgamation 3530400)",
+    "compile": "gcc -O3 -DSQLITE_ENABLE_RTREE -I sqlite-amalgamation-3530400",
+    "size": 100,
+    "totalMs": 6494,
+    "totalLine": "TOTAL.......................................................    6.494s",
+    "logLines": 93,
+    "note": "default testset list ends at rtree; without -DSQLITE_ENABLE_RTREE speedtest1 calls fatal_error (exit 1) rather than skipping"
+  },
+  "port": {
+    "script": "scripts of spd-port.mjs: batched inserts in growing group sizes, PK/range/like lookups, full scan, update, delete, 100KB blobs",
+    "steps": 15,
+    "runtime": "Bun 1.4.2 on the same VM",
+    "embedded": { "label": "embedded-bun", "totalMs": 483, "errors": 0, "db": "bun:sqlite local file" },
+    "sqld": {
+      "label": "sqld-over-hrana",
+      "totalMs": 8385,
+      "errors": 0,
+      "url": "ws://127.0.0.1:6107 (loopback)",
+      "endpoint": "created via sqlitend API; one full-access token minted",
+      "overheadRatio": 17.4,
+      "hostPeaksDuringRun": { "usedMb": 332, "load1": 0.84, "sqldRssMb": 31 }
+    }
+  }
+}
