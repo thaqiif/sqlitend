@@ -1,0 +1,25 @@
+{
+  "name": "sqlitend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Single-operator self-hosted libSQL/sqld management platform",
+  "type": "module",
+  "engines": {
+    "bun": ">=1.1"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun --watch run apps/server/src/index.ts",
+    "build": "bun run --cwd apps/web build",
+    "start": "bun run apps/server/src/index.ts",
+    "test": "bun test apps/server",
+    "e2e": "bun run scripts/e2e-killer-workflow.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@libsql/client": "^0.14.0"
+  }
+}

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  unit:
+    name: Server unit tests + typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Server unit tests
+        run: bun test apps/server
+
+      - name: Typecheck server
+        run: bunx tsc --noEmit -p apps/server/tsconfig.json
+
+      - name: Typecheck web
+        run: bunx tsc --noEmit -p apps/web/tsconfig.json
+
+      - name: Build web (SPA)
+        run: bun run build
+
+  e2e:
+    name: End-to-end (fetches sqld)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Fetch sqld binary
+        run: bash scripts/fetch-sqld.sh
+
+      - name: Run end-to-end workflow
+        run: bun run e2e
