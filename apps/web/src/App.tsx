@@ -73,12 +73,14 @@ export function App({ onLogout }: { onLogout?: () => void } = {}) {
   async function handleCreateWorkspace(name: string) {
     const ws = await api.createWorkspace({ name });
     await refreshWorkspaces();
+    void loadSystem();
     setSelectedWorkspaceId(ws.id);
   }
 
   async function handleDeleteWorkspace(id: string) {
     await api.deleteWorkspace(id); // 409 (has databases) surfaces as ApiError
     await refreshWorkspaces();
+    void loadSystem();
   }
 
   if (loading) {
@@ -171,6 +173,7 @@ export function App({ onLogout }: { onLogout?: () => void } = {}) {
           onCreateWorkspace={handleCreateWorkspace}
           onDeleteWorkspace={handleDeleteWorkspace}
           publicHost={systemInfo?.publicHost}
+          onChanged={() => void loadSystem()}
         />
       )}
     </div>

@@ -50,6 +50,8 @@ export const DatabaseSchema = z.object({
   sqldVersion: z.string().nullable(),
   /** Last launch failure (sqld stderr tail) — null after a successful start. */
   failedReason: z.string().nullable(),
+  /** Public HTTPS URL via the gateway; null when the gateway is off. */
+  publicUrl: z.string().nullable().default(null),
   /** Managed public DNS record; status null when DNS automation is off. */
   dns: z
     .object({

@@ -760,3 +760,16 @@ code, pre {
 .verify-pending { color: var(--muted); }
 .verify-stale { color: var(--warn); }
 .verify-failed { color: var(--danger); }
+
+/* UI pass: card meta, badges, relative times */
+.db-meta { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.db-endpoint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-badges { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.5rem 0 0.75rem; }
+.scope-badge, .status-badge { white-space: nowrap; }
+.conn-primary { display: flex; flex-direction: column; gap: 0.5rem; }
+.conn-more summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; margin-top: 0.75rem; }
+.conn-more[open] summary { margin-bottom: 0.5rem; }
+.conn-value { white-space: pre-wrap; word-break: break-all; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -0.25rem; }
+.table-scroll .token-table { min-width: 560px; }
+.table-scroll .token-table td { white-space: nowrap; }

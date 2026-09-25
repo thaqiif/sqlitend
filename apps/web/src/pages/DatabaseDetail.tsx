@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BackupStatus, Connection, Database, Metrics, Token, TokenIssued, Workspace } from "@sqlitend/shared";
 import { RestoreDialog } from "../components/RestoreDialog";
+import { fullTime, relTime } from "../format";
 import { api } from "../api/client";
 import { MetricTiles } from "../components/MetricTiles";
 import { Modal } from "../components/Modal";
@@ -248,7 +249,7 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
         </button>
         <div className="detail-title">
           <h2>{db.name}</h2>
-          <span className="db-slug">{db.slug}</span>
+          {db.slug !== db.name && <span className="db-slug">{db.slug}</span>}
           <span className={`status-badge status-${db.status}`}>{db.status}</span>
         </div>
         <div className="detail-actions">
@@ -283,7 +284,18 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
         <h3 className="panel-title">Connection</h3>
         {connection ? (
           <div className="conn-list">
-            {connection.publicUrl && <CopyRow label="PUBLIC" value={connection.publicUrl} />}
+            <div className="conn-primary">
+              <CopyRow label={connection.publicUrl ? "URL" : "HTTP"} value={connection.publicUrl ?? connection.httpUrl} />
+              <CopyRow
+                label=".ENV"
+                value={`LIBSQL_URL=${connection.publicUrl ?? connection.httpUrl}\nLIBSQL_AUTH_TOKEN=<token from "Generate token">`}
+              />
+            </div>
+            <p className="hint">
+              {connection.publicUrl
+                ? "Use the URL with @libsql/client (https://, also from Cloudflare Workers). Tokens are shown once, when generated."
+                : "No public hostname: enable the gateway (docs/gateway.md) to reach this database from outside the server."}
+            </p>
             {db.dns.status && (
               <p className={db.dns.status === "active" ? "muted" : "error-detail"} role={db.dns.status === "active" ? undefined : "alert"}>
                 DNS {db.dns.hostname}: {db.dns.status}
@@ -298,9 +310,12 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
                 )}
               </p>
             )}
-            <CopyRow label="HTTP" value={connection.httpUrl} />
-            <CopyRow label="HRANA" value={connection.hranaUrl} />
-            <CopyRow label="gRPC" value={connection.grpcUrl} />
+            <details className="conn-more">
+              <summary>Server-local endpoints (reachable only on this machine)</summary>
+              <CopyRow label="HTTP" value={connection.httpUrl} />
+              <CopyRow label="HRANA" value={connection.hranaUrl} />
+              <CopyRow label="gRPC" value={connection.grpcUrl} />
+            </details>
           </div>
         ) : (
           <p className="muted">No connection details yet.</p>
@@ -321,6 +336,7 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
         {tokens.length === 0 ? (
           <p className="muted">No tokens issued.</p>
         ) : (
+          <div className="table-scroll">
           <table className="token-table">
             <thead>
               <tr>
@@ -339,9 +355,11 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
                   <td>
                     <span className={`scope-badge token-${tokenState(t)}`}>{TOKEN_STATE_LABEL[tokenState(t)]}</span>
                   </td>
-                  <td>{fmtTime(t.createdAt)}</td>
-                  <td>{fmtTime(t.expiresAt)}</td>
-                  <td>{t.lastUsedAt ? fmtTime(t.lastUsedAt) : <span className="muted">never</span>}</td>
+                  <td title={fullTime(t.createdAt)}>{relTime(t.createdAt)}</td>
+                  <td title={fullTime(t.expiresAt)}>{relTime(t.expiresAt)}</td>
+                  <td title={t.lastUsedAt ? fullTime(t.lastUsedAt) : undefined}>
+                    {t.lastUsedAt ? relTime(t.lastUsedAt) : <span className="muted">never</span>}
+                  </td>
                   <td className="cell-end">
                     {tokenState(t) !== "revoked" && (
                       <>
@@ -368,6 +386,7 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </section>
 

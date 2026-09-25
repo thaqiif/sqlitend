@@ -80,6 +80,7 @@ export function BackupsPage({
         ) : rows.length === 0 ? (
           <p className="muted">No backups in the store yet.</p>
         ) : (
+          <div className="table-scroll">
           <table className="token-table">
             <thead>
               <tr>
@@ -106,6 +107,7 @@ export function BackupsPage({
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </section>
       {restoring && (
