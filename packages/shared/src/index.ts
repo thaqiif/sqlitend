@@ -63,6 +63,8 @@ export const ConnectionSchema = z.object({
   httpUrl: z.string().url(),
   hranaUrl: z.string(),
   grpcUrl: z.string(),
+  /** Public HTTPS URL via the gateway (e.g. https://<db>-libsql.example.com); null when the gateway is disabled. */
+  publicUrl: z.string().url().nullable().default(null),
   dbName: z.string(),
 });
 export type Connection = z.infer<typeof ConnectionSchema>;

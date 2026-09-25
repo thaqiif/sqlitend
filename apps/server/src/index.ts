@@ -28,6 +28,7 @@ import { sqldVersion } from "./supervisor/launcher.ts";
 import { Sampler, type SamplerRow } from "./metrics/sampler.ts";
 import { createRoutes } from "./http/routes.ts";
 import { createStaticHandler, isAllowedHost } from "./http/static.ts";
+import { createGatewayHandler, lookupByKey, parseHostTemplate } from "./gateway/gateway.ts";
 
 export const VERSION = "0.1.0";
 
@@ -169,6 +170,30 @@ function rateLimited(): boolean {
 console.log(`sqlitend ${VERSION} listening on http://${config.host}:${server.port}`);
 
 // ---------------------------------------------------------------------------
+// Gateway (optional): host-routed public front for all databases
+// ---------------------------------------------------------------------------
+const gatewayServer = config.gatewayPort > 0 && config.gatewayHostTemplate
+  ? Bun.serve({
+      port: config.gatewayPort,
+      hostname: config.gatewayHost,
+      maxRequestBodySize: config.gatewayMaxBodyBytes,
+      // Bun's 10 s default would drop long Hrana pipelines (migrations, VACUUM).
+      idleTimeout: 255,
+      fetch: createGatewayHandler({
+        template: parseHostTemplate(config.gatewayHostTemplate),
+        findDatabase: (key) => lookupByKey(key, databases),
+        // sqld binds config.host; a wildcard bind answers on loopback.
+        upstreamHost: ["0.0.0.0", "::", "*"].includes(config.host) ? "127.0.0.1" : config.host,
+        maxBodyBytes: config.gatewayMaxBodyBytes,
+        upstreamTimeoutMs: 240_000,
+      }),
+    })
+  : null;
+if (gatewayServer) {
+  console.log(`[gateway] listening on http://${config.gatewayHost}:${gatewayServer.port} for ${config.gatewayHostTemplate}`);
+}
+
+// ---------------------------------------------------------------------------
 // Graceful shutdown
 // ---------------------------------------------------------------------------
 let shuttingDown = false;
@@ -179,6 +204,7 @@ async function shutdown() {
   await supervisor.shutdown();
   sampler.stop();
   server.stop(true);
+  gatewayServer?.stop(true);
   metadata.db.close();
   console.log("[shutdown] complete");
   process.exit(0);

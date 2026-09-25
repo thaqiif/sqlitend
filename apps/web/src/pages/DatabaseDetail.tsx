@@ -236,6 +236,7 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
         <h3 className="panel-title">Connection</h3>
         {connection ? (
           <div className="conn-list">
+            {connection.publicUrl && <CopyRow label="PUBLIC" value={connection.publicUrl} />}
             <CopyRow label="HTTP" value={connection.httpUrl} />
             <CopyRow label="HRANA" value={connection.hranaUrl} />
             <CopyRow label="gRPC" value={connection.grpcUrl} />

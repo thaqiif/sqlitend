@@ -28,6 +28,7 @@ import type { Sampler } from "../metrics/sampler.ts";
 import { PortExhaustedError } from "../supervisor/ports.ts";
 import { mintToken, dbKeyRelPath } from "../auth/tokens.ts";
 import { assertInside } from "../util/paths.ts";
+import { maxSlugLength, parseHostTemplate, publicKeyFor, renderHost } from "../gateway/gateway.ts";
 
 // ---------------------------------------------------------------------------
 // DTO mappers (snake_case rows -> camelCase shared DTOs)
@@ -128,6 +129,7 @@ export interface RoutesDeps {
 
 export function createRoutes(d: RoutesDeps): Hono {
   const app = new Hono();
+  const hostTemplate = d.config.gatewayHostTemplate ? parseHostTemplate(d.config.gatewayHostTemplate) : null;
 
   // Request log — every API call leaves one line (method, path, status, ms).
   app.use("*", async (c, next) => {
@@ -200,6 +202,13 @@ export function createRoutes(d: RoutesDeps): Hono {
     }
 
     const slug = slugify(body.name);
+    if (hostTemplate && slug.length > maxSlugLength(hostTemplate)) {
+      throw new ApiError(
+        400,
+        "name_too_long",
+        `name is too long for a public hostname: slug "${slug}" exceeds ${maxSlugLength(hostTemplate)} characters`,
+      );
+    }
     const id = randomUUID();
     const dataDir = path.join(d.config.dataRoot, "workspaces", ws.slug, "dbs", slug);
 
@@ -327,6 +336,7 @@ export function createRoutes(d: RoutesDeps): Hono {
       httpUrl: `http://${d.config.publicHost}:${row.port}`,
       hranaUrl: `ws://${d.config.publicHost}:${row.port}`,
       grpcUrl: `http://${d.config.publicHost}:${row.grpc_port}`,
+      publicUrl: hostTemplate ? `https://${renderHost(hostTemplate, publicKeyFor(hostTemplate, row))}` : null,
       dbName: row.slug,
     };
     return c.json(conn);

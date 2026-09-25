@@ -70,9 +70,14 @@ function makeApp(over: {
   sampler?: Sampler;
   sqldOk?: boolean;
   publicHost?: string;
+  gatewayHostTemplate?: string;
 } = {}) {
   return createRoutes({
-    config: loadConfig({}, { dataRoot: dir, ...(over.publicHost ? { publicHost: over.publicHost } : {}) }),
+    config: loadConfig({}, {
+      dataRoot: dir,
+      ...(over.publicHost ? { publicHost: over.publicHost } : {}),
+      ...(over.gatewayHostTemplate ? { gatewayPort: 6080, gatewayHostTemplate: over.gatewayHostTemplate } : {}),
+    }),
     workspaces,
     databases,
     tokens,
@@ -237,6 +242,24 @@ describe("start / stop routes", () => {
     expect(conn.httpUrl).toBe("http://127.0.0.1:5001");
     expect(conn.hranaUrl).toBe("ws://127.0.0.1:5001");
     expect(conn.grpcUrl).toBe("http://127.0.0.1:5002");
+  });
+
+  test("publicUrl is null without a gateway and https://<slug><suffix> with one", async () => {
+    const d = databases.create(dbRow(ws().id, { slug: "bots-prod", port: 5001, grpc_port: 5002, status: "running" }));
+    const off = (await (await send(makeApp(), "GET", `/api/databases/${d.id}/connection`)).json()) as { publicUrl: string | null };
+    expect(off.publicUrl).toBeNull();
+    const app = makeApp({ gatewayHostTemplate: "{db}-libsql.cloudsby.me" });
+    const on = (await (await send(app, "GET", `/api/databases/${d.id}/connection`)).json()) as { publicUrl: string | null };
+    expect(on.publicUrl).toBe("https://bots-prod-libsql.cloudsby.me");
+  });
+
+  test("create rejects names whose slug cannot fit a DNS label under the gateway template", async () => {
+    const app = makeApp({ gatewayHostTemplate: "{db}-libsql.cloudsby.me" });
+    const res = await send(app, "POST", `/api/workspaces/${ws().id}/databases`, { name: "x".repeat(57) });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("name_too_long");
+    const fits = await send(app, "POST", `/api/workspaces/${ws().id}/databases`, { name: "y".repeat(56) });
+    expect(fits.status).toBe(201);
   });
 
   test("connection URLs advertise SQLITEND_PUBLIC_HOST when configured", async () => {

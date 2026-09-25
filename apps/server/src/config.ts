@@ -1,5 +1,6 @@
 import path from "node:path";
 import os from "node:os";
+import { parseHostTemplate } from "./gateway/gateway.ts";
 
 // ---------------------------------------------------------------------------
 // Configuration, hand-validated from env (see .env.example for the full set).
@@ -36,6 +37,14 @@ export interface Config {
   readyTimeoutMs: number;
   /** Max accepted JSON body size for mutating API calls, bytes. */
   maxBodyBytes: number;
+  /** Gateway listener port; 0 = gateway disabled (default). */
+  gatewayPort: number;
+  /** Gateway bind address. Default 127.0.0.1 — expose via a tunnel/proxy. */
+  gatewayHost: string;
+  /** Public hostname template, e.g. "{db}-libsql.cloudsby.me"; null when disabled. */
+  gatewayHostTemplate: string | null;
+  /** Max proxied request body, bytes (Hrana batches can be large). */
+  gatewayMaxBodyBytes: number;
 }
 
 const DEFAULT_HOST = "0.0.0.0";
@@ -101,6 +110,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     sampleIntervalMs: parsePositiveInt("SQLITEND_SAMPLE_INTERVAL_MS", env.SQLITEND_SAMPLE_INTERVAL_MS, 5000, 250, 600_000),
     readyTimeoutMs: parsePositiveInt("SQLITEND_READY_TIMEOUT_MS", env.SQLITEND_READY_TIMEOUT_MS, 10_000, 500, 120_000),
     maxBodyBytes: parsePositiveInt("SQLITEND_MAX_BODY_BYTES", env.SQLITEND_MAX_BODY_BYTES, 1_000_000, 1024, 64 * 1024 * 1024),
+    ...loadGatewayConfig(env),
     ...overrides,
+  };
+}
+
+function loadGatewayConfig(env: NodeJS.ProcessEnv): Pick<Config, "gatewayPort" | "gatewayHost" | "gatewayHostTemplate" | "gatewayMaxBodyBytes"> {
+  const gatewayPort = parsePositiveInt("SQLITEND_GATEWAY_PORT", env.SQLITEND_GATEWAY_PORT, 0, 0, 65535);
+  const template = env.SQLITEND_GATEWAY_HOST_TEMPLATE?.trim() || null;
+  if (gatewayPort > 0 && !template) {
+    throw new Error("SQLITEND_GATEWAY_PORT is set but SQLITEND_GATEWAY_HOST_TEMPLATE is empty (e.g. \"{db}-libsql.example.com\")");
+  }
+  if (gatewayPort > 0 && template) parseHostTemplate(template); // fail loudly at boot
+  return {
+    gatewayPort,
+    gatewayHost: env.SQLITEND_GATEWAY_HOST?.trim() || "127.0.0.1",
+    gatewayHostTemplate: gatewayPort > 0 ? template : null,
+    gatewayMaxBodyBytes: parsePositiveInt("SQLITEND_GATEWAY_MAX_BODY_BYTES", env.SQLITEND_GATEWAY_MAX_BODY_BYTES, 32 * 1024 * 1024, 1024, 256 * 1024 * 1024),
   };
 }
