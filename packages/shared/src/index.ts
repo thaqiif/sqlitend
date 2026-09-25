@@ -26,6 +26,9 @@ export const DatabaseStatusSchema = z.enum([
   "crashed",
   "failed",
   "deleting",
+  // Being restored from a backup replica (background job; auto_start stays 0
+  // until the restored file is verified and in place).
+  "restoring",
   // Read-coercion fallback for a corrupt/unparseable metadata row: the API
   // serves it visibly rather than 500ing the whole list. Never written by the
   // server — the supervisor only persists the six real states.
@@ -187,3 +190,54 @@ export const AuditEntrySchema = z.object({
   detail: z.string().nullable(),
 });
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;
+
+// ---------------------------------------------------------------------------
+// Backups (Litestream → S3)
+// ---------------------------------------------------------------------------
+export const BackupStatusSchema = z.object({
+  enabled: z.boolean(),
+  state: z.enum(["disabled", "starting", "ok", "lagging", "error", "stopped"]),
+  replicaUrl: z.string().nullable(),
+  txidDb: z.string().nullable(),
+  txidReplica: z.string().nullable(),
+  lastSyncAt: z.number().int().nullable(),
+  lastSnapshotAt: z.number().int().nullable(),
+  behindSince: z.number().int().nullable(),
+  lastError: z.string().nullable(),
+  lastErrorAt: z.number().int().nullable(),
+  restarts: z.number().int(),
+  /** Latest restore-verify (null = never ran). */
+  verify: z
+    .object({
+      health: z.enum(["ok", "failed", "stale", "pending"]),
+      lastAt: z.number().int().nullable(),
+      lastOutcome: z.enum(["ok", "failed"]).nullable(),
+      lastDetail: z.string().nullable(),
+      lastOkAt: z.number().int().nullable(),
+      restoredBytes: z.number().int().nullable(),
+    })
+    .nullable()
+    .default(null),
+});
+export type BackupStatus = z.infer<typeof BackupStatusSchema>;
+
+export const RestoreRequestSchema = z
+  .object({
+    name: z.string().min(1).max(128),
+    workspaceId: z.string().uuid(),
+    /** Point in time (RFC 3339, e.g. 2026-09-25T08:00:00Z); omitted = latest. */
+    at: z.string().datetime({ offset: true }).optional(),
+  })
+  .strict();
+export type RestoreRequest = z.infer<typeof RestoreRequestSchema>;
+
+export const ReplicaInfoSchema = z.object({
+  id: z.string(),
+  slug: z.string().optional(),
+  name: z.string().optional(),
+  workspaceId: z.string().optional(),
+  createdAt: z.number().optional(),
+  updatedAt: z.number().optional(),
+  exists: z.boolean(),
+});
+export type ReplicaInfo = z.infer<typeof ReplicaInfoSchema>;
