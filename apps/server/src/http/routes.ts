@@ -31,10 +31,11 @@ import { assertInside } from "../util/paths.ts";
 import type { DnsManager } from "../dns/manager.ts";
 import type { Replicator } from "../backup/replicator.ts";
 import type { RestoreService } from "../backup/restore.ts";
+import type { ImportService } from "../backup/import.ts";
 import { verifyHealth, type VerifyService } from "../backup/verify.ts";
 import type { VerificationsRepo } from "../db/repos/verifications.ts";
 import type { ControlBackupService } from "../backup/control.ts";
-import { RestoreRequestSchema, type BackupStatus, type RestoreRequest } from "@sqlitend/shared";
+import { ImportRequestSchema, RestoreRequestSchema, type BackupStatus, type ImportRequest, type RestoreRequest } from "@sqlitend/shared";
 import { installAuth, type AppEnv, type AuthDeps } from "./auth-routes.ts";
 import { maxSlugLength, parseHostTemplate, publicKeyFor, renderHost } from "../gateway/gateway.ts";
 
@@ -145,6 +146,7 @@ export interface RoutesDeps {
   /** Continuous S3 backup; absent when not configured. */
   backup?: Replicator | null;
   restore?: RestoreService | null;
+  importer?: ImportService | null;
   control?: ControlBackupService | null;
   verify?: { service: VerifyService; results: VerificationsRepo; maxAgeMs: number; startedAt?: number } | null;
   /** Control-plane login; absent only with SQLITEND_AUTH=off (loopback dev). */
@@ -286,6 +288,7 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
   app.delete("/api/databases/:id", async (c) => {
     const row = requireDb(c.req.param("id"));
     if (d.restore?.isRestoring(row.id)) throw new ApiError(409, "restoring", "a restore into this database is still running");
+    if (d.importer?.isImporting(row.id)) throw new ApiError(409, "importing", "an import into this database is still running");
     d.databases.updateStatus(row.id, "deleting");
     // killByDbId is serialized per-dbId (an in-flight start completes first)
     // and covers ADOPTED processes — the process MUST be dead before the data
@@ -429,6 +432,30 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     if (!ws) throw new ApiError(404, "not_found", "workspace not found");
     const { row } = await reserveDatabase(ws, body.name, { status: "restoring", autoStart: 0 });
     d.restore.start(sourceId, row, body.at ? new Date(body.at).toISOString().replace(/\.\d{3}Z$/, "Z") : undefined);
+    return c.json(toDto(row), 202);
+  });
+
+  // ---- import ---------------------------------------------------------------
+  app.get("/api/imports", (c) => {
+    if (!d.importer) throw new ApiError(409, "import_disabled", "import is not available");
+    return c.json({ dir: d.importer.dir, files: d.importer.list() });
+  });
+
+  app.post("/api/workspaces/:id/databases/import", async (c) => {
+    if (!d.importer) throw new ApiError(409, "import_disabled", "import is not available");
+    const ws = d.workspaces.getById(c.req.param("id"));
+    if (!ws) throw new ApiError(404, "not_found", "workspace not found");
+    if (!d.sqldOk) throw new ApiError(503, "sqld_unavailable", `sqld binary not usable — run scripts/fetch-sqld.sh`);
+    let body: ImportRequest;
+    try {
+      body = ImportRequestSchema.parse(await c.req.json());
+    } catch (err) {
+      throw new ApiError(400, "bad_request", "invalid import payload", zodDetail(err));
+    }
+    const src = d.importer.resolve(body.file);
+    if ("error" in src) throw new ApiError(400, "bad_file", src.error);
+    const { row } = await reserveDatabase(ws, body.name, { status: "restoring", autoStart: 0 });
+    d.importer.start(src.path, row);
     return c.json(toDto(row), 202);
   });
 
@@ -592,7 +619,7 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
    *  has no data file yet, and a failed restore has none either — starting it
    *  would publish (and replicate) an empty database under the restored name. */
   function assertNotRestoreTarget(row: DbRow): void {
-    if (row.status === "restoring" || d.restore?.isRestoring(row.id)) {
+    if (row.status === "restoring" || d.restore?.isRestoring(row.id) || d.importer?.isImporting(row.id)) {
       throw new ApiError(409, "restoring", "a restore into this database is still running");
     }
     if ((row.failed_reason ?? "").startsWith("restore pending")) {

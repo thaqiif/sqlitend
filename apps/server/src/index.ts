@@ -38,6 +38,7 @@ import { clientIp } from "./http/client-ip.ts";
 import { removePidFile, writePidFile } from "./util/pidfile.ts";
 import { Replicator } from "./backup/replicator.ts";
 import { RestoreService, realRunLitestream, s3ClientFor } from "./backup/restore.ts";
+import { ImportService } from "./backup/import.ts";
 import { VerifyService, nextRunAt, verifyHealth } from "./backup/verify.ts";
 import { ControlBackupService, parseBackupKey, snapshotControlPlane } from "./backup/control.ts";
 import { VerificationsRepo } from "./db/repos/verifications.ts";
@@ -155,6 +156,18 @@ const restore = config.backup
     })
   : null;
 
+// Importing an outside SQLite file works with or without backups configured.
+const importer = new ImportService({
+  dataRoot: config.dataRoot,
+  databases,
+  startDatabase: (row) =>
+    supervisor.startDatabase(row.id, { port: row.port!, grpcPort: row.grpc_port!, dataDir: row.data_dir }),
+  afterStart: async (row) => {
+    await dns?.sync(row);
+  },
+});
+importer.ensureDir();
+
 const verifications = new VerificationsRepo(metadata.db);
 const verifier = config.backup
   ? new VerifyService({
@@ -242,6 +255,7 @@ else if (!authService!.setupDone) console.warn("[auth] no admin password yet —
 const routes = createRoutes({
   backup: replicator,
   restore,
+  importer,
   control,
   verify: verifier ? { service: verifier, results: verifications, maxAgeMs: config.backup!.verifyMaxAgeMs, startedAt: verifier.startedAt } : null,
   auth: authService ? { service: authService, repo: authRepo, cookieSecure: config.cookieSecure } : null,

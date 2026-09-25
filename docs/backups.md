@@ -112,6 +112,29 @@ with the earliest restorable time. How far back you can go is `SQLITEND_BACKUP_R
 A deleted database is restored by its old id. The manifest (`<prefix>/db/<id>/sqlitend.json`)
 supplies its name.
 
+## Import an existing SQLite file
+
+This brings a database from another host (for example a namespace from a plain `sqld` server, or a
+`litestream restore` output) into sqlitend as a **new** database. It works with or without backups configured.
+
+1. Put the file in the import directory, owned by the service user:
+   ```sh
+   sudo install -o sqlitend -g sqlitend -m 0600 quranready_prod.db /var/lib/sqlitend/imports/
+   ```
+   Copy the `-wal` file next to it too, if the source had one. The import merges it.
+2. Start the import. The file is referred to by its **name only**; paths and symlinks are refused.
+   ```
+   GET  /api/imports                                   → {dir, files:[{file, bytes, tables}]}
+   POST /api/workspaces/:id/databases/import  {"name":"quranready-prod","file":"quranready_prod.db"}  → 202
+   ```
+3. sqlitend takes a consistent, WAL-merged copy with `VACUUM INTO`, runs `PRAGMA integrity_check` on the copy,
+   places it where sqld expects it and starts it. Then the usual start-up steps run: its DNS record is created and
+   Litestream replication begins. While this runs the database shows `restoring` and cannot be started,
+   stopped or deleted. On any problem it becomes `failed` with `import failed: …` and nothing is published.
+4. The source file is never changed in content. Delete it from `imports/` once the new database checks out.
+
+Tokens are **not** carried over. Mint a new token for the new hostname and give it to the app.
+
 ## Nightly restore-verify
 
 "Uploading" doesn't prove "restorable". Every night at `SQLITEND_BACKUP_VERIFY_AT` (default `03:30`,
