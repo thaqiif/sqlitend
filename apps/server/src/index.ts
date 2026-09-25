@@ -137,7 +137,7 @@ if (dns) {
 for (const r of databases.list()) {
   if (r.status === "restoring") {
     databases.updateStatus(r.id, "failed");
-    databases.setFailedReason(r.id, "restore interrupted by a restart — delete this database and restore again");
+    databases.setFailedReason(r.id, "restore/import interrupted by a restart — delete this database and run it again");
     console.warn(`[restore] ${r.slug}: interrupted by restart, marked failed`);
   }
 }

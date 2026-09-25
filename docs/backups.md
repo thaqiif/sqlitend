@@ -117,21 +117,25 @@ supplies its name.
 This brings a database from another host (for example a namespace from a plain `sqld` server, or a
 `litestream restore` output) into sqlitend as a **new** database. It works with or without backups configured.
 
-1. Put the file in the import directory, owned by the service user:
+1. Make **one self-contained file**, after the source has stopped taking writes (freeze the app, or stop its
+   sqld). Otherwise writes made after the copy are silently missing. Use `sqlite3 <src> ".backup /tmp/x.db"`
+   (safe even while sqld runs), or the output of `litestream restore`. Then put it in the import directory,
+   owned by the service user:
    ```sh
-   sudo install -o sqlitend -g sqlitend -m 0600 quranready_prod.db /var/lib/sqlitend/imports/
+   sudo install -o sqlitend -g sqlitend -m 0600 /tmp/x.db /var/lib/sqlitend/imports/quranready_prod.db
    ```
-   Copy the `-wal` file next to it too, if the source had one. The import merges it.
+   A `-wal`, `-shm` or `-journal` next to the file is **refused**, not merged. Nothing ties a WAL to its
+   database, so a stale one would replay the wrong pages.
 2. Start the import. The file is referred to by its **name only**; paths and symlinks are refused.
    ```
    GET  /api/imports                                   → {dir, files:[{file, bytes, tables}]}
    POST /api/workspaces/:id/databases/import  {"name":"quranready-prod","file":"quranready_prod.db"}  → 202
    ```
-3. sqlitend takes a consistent, WAL-merged copy with `VACUUM INTO`, runs `PRAGMA integrity_check` on the copy,
+3. sqlitend copies the file's bytes into a private staging dir, logs the size and SHA-256 (compare them with your copy), compacts it with `VACUUM INTO`, runs `PRAGMA integrity_check` on the copy,
    places it where sqld expects it and starts it. Then the usual start-up steps run: its DNS record is created and
    Litestream replication begins. While this runs the database shows `restoring` and cannot be started,
    stopped or deleted. On any problem it becomes `failed` with `import failed: …` and nothing is published.
-4. The source file is never changed in content. Delete it from `imports/` once the new database checks out.
+4. The source file is never opened by SQLite, so it is left byte for byte as it was. Delete it from `imports/` once the new database checks out.
 
 Tokens are **not** carried over. Mint a new token for the new hostname and give it to the app.
 

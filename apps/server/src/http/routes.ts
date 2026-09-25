@@ -299,6 +299,9 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     await d.backup?.stop(row.id, { removeConfig: true });
     assertInside(d.config.dataRoot, row.data_dir);
     await rm(row.data_dir, { recursive: true, force: true });
+    // Staging left by a restore/import interrupted by a crash.
+    await rm(`${row.data_dir}.restore`, { recursive: true, force: true });
+    await rm(`${row.data_dir}.import`, { recursive: true, force: true });
     // Remove now-empty parent directories (workspaces/<ws>/dbs, then the
     // workspace dir) — rmdir only deletes empty dirs, so a workspace with
     // other databases is preserved untouched.
@@ -620,13 +623,16 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
    *  would publish (and replicate) an empty database under the restored name. */
   function assertNotRestoreTarget(row: DbRow): void {
     if (row.status === "restoring" || d.restore?.isRestoring(row.id) || d.importer?.isImporting(row.id)) {
-      throw new ApiError(409, "restoring", "a restore into this database is still running");
+      throw new ApiError(409, "restoring", "a restore or import into this database is still running");
     }
     if ((row.failed_reason ?? "").startsWith("restore pending")) {
       throw new ApiError(409, "restore_pending", "data not restored yet — run `sqlitend restore-data` with the server stopped");
     }
     if (row.status === "failed" && (row.failed_reason ?? "").startsWith("restore")) {
       throw new ApiError(409, "restore_failed", "this database is a failed restore target — delete it and restore again");
+    }
+    if (row.status === "failed" && (row.failed_reason ?? "").startsWith("import")) {
+      throw new ApiError(409, "import_failed", "this database is a failed import target — delete it and import again");
     }
   }
 

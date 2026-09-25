@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database as SQLite } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Database } from "bun:sqlite";
@@ -49,6 +49,15 @@ function makeWalSource(file: string, rows: number): void {
   renameSync(`${file}.copy-wal`, `${file}-wal`);
 }
 
+/** A self-contained file (what `sqlite3 src ".backup out"` produces). */
+function makeSource(file: string, rows: number): void {
+  mkdirSync(path.dirname(file), { recursive: true });
+  const db = new SQLite(file);
+  db.exec("CREATE TABLE ayat(id INTEGER PRIMARY KEY, text TEXT)");
+  for (let i = 0; i < rows; i++) db.query("INSERT INTO ayat(text) VALUES (?)").run(`a${i}`);
+  db.close();
+}
+
 function service(over: Partial<ConstructorParameters<typeof ImportService>[0]> = {}) {
   const started: string[] = [];
   const synced: string[] = [];
@@ -82,11 +91,11 @@ const count = (file: string) => {
 };
 
 describe("import job", () => {
-  test("copies (WAL merged), verifies, places the file where sqld expects it, starts, runs afterStart", async () => {
+  test("copies, verifies, places the file where sqld expects it, starts, runs afterStart; source byte-identical", async () => {
     const { svc, started, synced } = service();
     const src = path.join(svc.dir, "quranready_prod.db");
-    makeWalSource(src, 300);
-    expect(existsSync(`${src}-wal`)).toBe(true);
+    makeSource(src, 300);
+    const before = { bytes: readFileSync(src), mtime: statSync(src).mtimeMs };
     const t = target();
     svc.start(src, t);
     expect(svc.isImporting(t.id)).toBe(true);
@@ -96,10 +105,26 @@ describe("import job", () => {
     expect(row.auto_start).toBe(1);
     expect(started).toEqual([t.id]);
     expect(synced).toEqual([t.id]);
-    expect(count(sqldDataFile(t.data_dir))).toBe(300); // rows that lived only in the -wal are included
-    expect(existsSync(`${sqldDataFile(t.data_dir)}-wal`)).toBe(false);
+    expect(count(sqldDataFile(t.data_dir))).toBe(300);
     expect(existsSync(`${t.data_dir}.import`)).toBe(false);
-    expect(count(src)).toBe(300); // source untouched in content
+    expect(readFileSync(src).equals(before.bytes)).toBe(true);
+    expect(statSync(src).mtimeMs).toBe(before.mtime);
+    for (const x of ["-wal", "-shm", "-journal"]) expect(existsSync(src + x)).toBe(false);
+  });
+
+  test("a -wal next to the source is refused (never merged) and the source is left alone", async () => {
+    const { svc, started } = service();
+    const src = path.join(svc.dir, "live.db");
+    makeWalSource(src, 50);
+    const walBefore = readFileSync(`${src}-wal`);
+    expect(svc.resolve("live.db")).toMatchObject({ error: expect.stringContaining("live.db-wal sits next to it") });
+    // Even if it appears after the request was accepted, the job re-checks.
+    const t = target();
+    svc.start(src, t);
+    await svc.settled(t.id);
+    expect(databases.getById(t.id)!.failed_reason).toContain("sits next to it");
+    expect(started).toEqual([]);
+    expect(readFileSync(`${src}-wal`).equals(walBefore)).toBe(true);
   });
 
   test("not a SQLite file → failed, nothing placed, never started", async () => {
@@ -119,7 +144,7 @@ describe("import job", () => {
   test("integrity failure → failed with the reason", async () => {
     const { svc, started } = service({ verify: () => "integrity_check: page 3 is never used" });
     const src = path.join(svc.dir, "a.db");
-    makeWalSource(src, 3);
+    makeSource(src, 3);
     const t = target();
     svc.start(src, t);
     await svc.settled(t.id);
@@ -130,7 +155,7 @@ describe("import job", () => {
   test("never overwrites an existing data file", async () => {
     const { svc, started } = service();
     const src = path.join(svc.dir, "a.db");
-    makeWalSource(src, 3);
+    makeSource(src, 3);
     const t = target();
     mkdirSync(path.dirname(sqldDataFile(t.data_dir)), { recursive: true });
     writeFileSync(sqldDataFile(t.data_dir), "old");
@@ -143,7 +168,7 @@ describe("import job", () => {
   test("sqld start failure → failed, reason says the data was imported", async () => {
     const { svc } = service({ startDatabase: async () => ({ ok: false, error: "port in use" }) });
     const src = path.join(svc.dir, "a.db");
-    makeWalSource(src, 3);
+    makeSource(src, 3);
     const t = target();
     svc.start(src, t);
     await svc.settled(t.id);
@@ -154,12 +179,12 @@ describe("import job", () => {
 describe("resolve + list", () => {
   test("only plain names of regular files inside the import dir", () => {
     const { svc } = service();
-    makeWalSource(path.join(svc.dir, "ok.db"), 1);
+    makeSource(path.join(svc.dir, "ok.db"), 1);
     writeFileSync(path.join(dir, "outside.db"), "x");
     symlinkSync(path.join(dir, "outside.db"), path.join(svc.dir, "link.db"));
     mkdirSync(path.join(svc.dir, "sub"));
     expect(svc.resolve("ok.db")).toEqual({ path: path.join(svc.dir, "ok.db") });
-    for (const bad of ["../outside.db", "/etc/passwd", "sub/x.db", ".hidden", "", "a b.db"]) expect("error" in svc.resolve(bad)).toBe(true);
+    for (const bad of ["../outside.db", "/etc/passwd", "sub/x.db", ".hidden", "", "a b.db", "ok.db-wal", "ok.db-journal"]) expect("error" in svc.resolve(bad)).toBe(true);
     expect(svc.resolve("link.db")).toEqual({ error: "file must be a regular file (no symlinks)" });
     expect(svc.resolve("sub")).toEqual({ error: "file must be a regular file (no symlinks)" });
     expect(svc.resolve("missing.db")).toMatchObject({ error: expect.stringContaining("no such file") });
@@ -167,7 +192,7 @@ describe("resolve + list", () => {
 
   test("list offers SQLite files only, skipping -wal/-shm, junk and symlinks", () => {
     const { svc } = service();
-    makeWalSource(path.join(svc.dir, "ok.db"), 1);
+    makeSource(path.join(svc.dir, "ok.db"), 1);
     writeFileSync(path.join(svc.dir, "junk.txt"), "hello");
     writeFileSync(path.join(dir, "outside.db"), "x");
     symlinkSync(path.join(dir, "outside.db"), path.join(svc.dir, "link.db"));
@@ -186,6 +211,7 @@ describe("import routes", () => {
       tokens: new TokensRepo(meta),
       supervisor: {
         portAllocator: createPortAllocator(loadConfig({}, { dataRoot: dir, portRange: { start: 27101, end: 27200 } }), { persistedInUse: () => new Set(), probe: async () => false }),
+        killByDbId: async () => {},
       } as unknown as Supervisor,
       sampler: {} as unknown as Sampler,
       sqldOk: true,
@@ -199,7 +225,7 @@ describe("import routes", () => {
 
   test("202 + a restoring row with ports; the job runs to running", async () => {
     const { svc } = service();
-    makeWalSource(path.join(svc.dir, "quranready_prod.db"), 7);
+    makeSource(path.join(svc.dir, "quranready_prod.db"), 7);
     const a = app(svc);
     const res = await post(a, `/api/workspaces/${wsId}/databases/import`, { name: "quranready-prod", file: "quranready_prod.db" });
     expect(res.status).toBe(202);
@@ -222,7 +248,7 @@ describe("import routes", () => {
 
   test("extra fields rejected; unknown workspace 404; delete blocked while importing", async () => {
     const { svc } = service({ startDatabase: () => new Promise(() => {}) }); // never finishes
-    makeWalSource(path.join(svc.dir, "a.db"), 1);
+    makeSource(path.join(svc.dir, "a.db"), 1);
     const a = app(svc);
     expect((await post(a, `/api/workspaces/${wsId}/databases/import`, { name: "x", file: "a.db", path: "/etc" })).status).toBe(400);
     expect((await post(a, `/api/workspaces/${crypto.randomUUID()}/databases/import`, { name: "x", file: "a.db" })).status).toBe(404);
@@ -232,9 +258,25 @@ describe("import routes", () => {
     expect((await post(a, `/api/databases/${id}/start`, {})).status).toBe(409);
   });
 
+  test("a failed import cannot be started (would publish an empty db); delete cleans up staging", async () => {
+    const { svc } = service();
+    writeFileSync(path.join(svc.dir, "junk.db"), "not sqlite".repeat(50));
+    const a = app(svc);
+    const { id } = (await (await post(a, `/api/workspaces/${wsId}/databases/import`, { name: "junk", file: "junk.db" })).json()) as { id: string };
+    await svc.settled(id);
+    expect(databases.getById(id)!.status).toBe("failed");
+    const r = await post(a, `/api/databases/${id}/start`, {});
+    expect(r.status).toBe(409);
+    expect(((await r.json()) as { error: { code: string } }).error.code).toBe("import_failed");
+    const row = databases.getById(id)!;
+    mkdirSync(`${row.data_dir}.import`, { recursive: true });
+    expect((await a.request(`/api/databases/${id}`, { method: "DELETE" })).status).toBe(204);
+    expect(existsSync(`${row.data_dir}.import`)).toBe(false);
+  });
+
   test("GET /api/imports lists the drop dir", async () => {
     const { svc } = service();
-    makeWalSource(path.join(svc.dir, "a.db"), 1);
+    makeSource(path.join(svc.dir, "a.db"), 1);
     const r = (await (await app(svc).request("/api/imports")).json()) as { dir: string; files: { file: string }[] };
     expect(r.dir).toBe(svc.dir);
     expect(r.files.map((f) => f.file)).toEqual(["a.db"]);
