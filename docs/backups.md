@@ -70,15 +70,55 @@ backoff (2 s … 60 s) and counted in `restarts`.
   replica stays in S3** (subject to retention), so a deleted database can still be recovered.
 - **sqlitend shutdown:** sqld stops first, then Litestream flushes and exits.
 
-## Restore (manual, until `sqlitend restore` lands)
+## Restore
+
+**A restore always creates a new database.** The source, live or deleted, is never touched. The new
+database gets its own id, signing key, tokens, hostname and replica path. That one operation covers:
+
+- "someone dropped a table": restore to 5 minutes ago beside production and copy the rows back;
+- "what did this look like yesterday?": restore to a point in time and compare;
+- "bring back the database I deleted": replicas are kept in S3 after a delete (subject to retention).
+
+**UI:** a database page → *Backup* → **Restore as new database…**, or the header's **Backups**,
+which lists every replica under this server's prefix, deleted databases included.
+
+**API:**
+
+```sh
+GET  /api/backups/replicas          # [{id, slug, name, workspaceId, exists}, …]
+POST /api/backups/<source-id>/restore
+     {"name": "mws-prod-restored", "workspaceId": "<ws id>", "at": "2026-09-25T08:00:00+08:00"}
+     # → 202 with the new database (status "restoring"); poll GET /api/databases/<new id>
+```
+
+What happens:
+
+1. The new row is created as `restoring` with `auto_start=0`, so a crash mid-restore can never come
+   back up as an **empty** database. At boot, an interrupted restore is marked `failed`.
+2. `litestream restore` writes to `<data_dir>.restore/data`.
+3. `PRAGMA integrity_check` must return `ok`; otherwise the restore fails and nothing is placed.
+4. The file moves to sqld's layout (`db.sqlite/dbs/default/data`), `auto_start=1`, sqld starts, DNS
+   is synced, and replication begins under the **new** id.
+5. On failure, the row is `failed` with the reason (Litestream's own message, e.g. "no matching
+   backup files available").
+
+**Point in time.** Litestream 0.5.16's `-timestamp` only accepts times *inside* the span of existing
+LTX files, so "restore to now" fails when the last write was a minute ago. sqlitend resolves the
+time itself (`litestream ltx -json`): it uses the highest transaction id of any LTX file written
+**strictly before** that time, then restores with `-txid`. This never includes a change made after
+the time you asked for; at worst it stops one second earlier. Times before the first backup fail
+with the earliest restorable time. How far back you can go is `SQLITEND_BACKUP_RETENTION`.
+
+A deleted database is restored by its old id. The manifest (`<prefix>/db/<id>/sqlitend.json`)
+supplies its name.
+
+### Manual restore without sqlitend (disaster recovery)
 
 ```sh
 LITESTREAM_ACCESS_KEY_ID=… LITESTREAM_SECRET_ACCESS_KEY=… \
   bin/litestream restore -o /tmp/restored.sqlite \
   "s3://<bucket>/<prefix>/db/<database-id>?endpoint=<endpoint>&region=<region>&force-path-style=true"
-# point in time: add  -timestamp 2026-09-25T08:00:00Z
 ```
 
-Restore **to a new file** and inspect it before swapping anything in; never restore over a live
-database. A safe, guided `sqlitend restore` (as a new database, or only into an empty one) and a
-scheduled restore-verify are the next backup slice.
+Next: a scheduled restore-verify drill, and an encrypted backup of the control plane (metadata +
+per-database signing keys) for rebuilding a whole server.

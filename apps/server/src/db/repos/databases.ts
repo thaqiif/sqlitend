@@ -179,6 +179,10 @@ export class DatabasesRepo {
     this.db.query("UPDATE databases SET failed_reason = ? WHERE id = ?").run(reason, dbId);
   }
 
+  setAutoStart(dbId: string, autoStart: 0 | 1): void {
+    this.db.query("UPDATE databases SET auto_start = ? WHERE id = ?").run(autoStart, dbId);
+  }
+
   /** Record the Cloudflare DNS state for a database (straight SET, clearable). */
   setDns(dbId: string, dns: { hostname: string | null; recordId: string | null; status: string | null; error: string | null }): void {
     this.db

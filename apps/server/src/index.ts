@@ -36,6 +36,7 @@ import { createSignatureVerifier } from "./auth/verify.ts";
 import { AuthService } from "./auth/session.ts";
 import { clientIp } from "./http/client-ip.ts";
 import { Replicator } from "./backup/replicator.ts";
+import { RestoreService, realRunLitestream, s3ClientFor } from "./backup/restore.ts";
 import { healthReport } from "./http/health.ts";
 
 export const VERSION = "0.1.0";
@@ -126,8 +127,40 @@ if (dns) {
   );
 }
 
+// A restore interrupted by a restart never resumes: its row stays auto_start=0
+// (so it was not launched empty) and is marked failed for the operator.
+for (const r of databases.list()) {
+  if (r.status === "restoring") {
+    databases.updateStatus(r.id, "failed");
+    databases.setFailedReason(r.id, "restore interrupted by a restart — delete this database and restore again");
+    console.warn(`[restore] ${r.slug}: interrupted by restart, marked failed`);
+  }
+}
+
+const restore = config.backup
+  ? new RestoreService({
+      config: config.backup,
+      databases,
+      s3: s3ClientFor(config.backup),
+      run: realRunLitestream(config.backup),
+      startDatabase: (row) =>
+        supervisor.startDatabase(row.id, { port: row.port!, grpcPort: row.grpc_port!, dataDir: row.data_dir }),
+      afterStart: async (row) => {
+        await dns?.sync(row);
+      },
+    })
+  : null;
+
 const replicator = config.backup
-  ? new Replicator({ config: config.backup, dataRoot: config.dataRoot, listDatabases: () => databases.list() })
+  ? new Replicator({
+      config: config.backup,
+      dataRoot: config.dataRoot,
+      listDatabases: () => databases.list(),
+      onLaunch: (id) => {
+        const row = databases.getById(id);
+        if (row) restore!.ensureManifest(row).catch((err) => console.warn(`[backup] manifest for ${row.slug}: ${(err as Error).message}`));
+      },
+    })
   : null;
 if (replicator) {
   await replicator.start(); // sweeps orphans from a crashed previous run first
@@ -142,6 +175,7 @@ else if (!authService!.setupDone) console.warn("[auth] no admin password yet —
 
 const routes = createRoutes({
   backup: replicator,
+  restore,
   auth: authService ? { service: authService, repo: authRepo, cookieSecure: config.cookieSecure } : null,
   dns,
   config,

@@ -4,13 +4,15 @@ import { api } from "./api/client";
 import { DatabasesPage } from "./pages/DatabasesPage";
 import { DatabaseDetail } from "./pages/DatabaseDetail";
 import { ActivityPage } from "./pages/ActivityPage";
+import { BackupsPage } from "./pages/BackupsPage";
 
 const SYSTEM_POLL_MS = 30_000;
 
 type View =
   | { name: "list" }
   | { name: "detail"; databaseId: string }
-  | { name: "activity" };
+  | { name: "activity" }
+  | { name: "backups" };
 
 /** `onLogout` is absent when the server runs without auth (SQLITEND_AUTH=off). */
 export function App({ onLogout }: { onLogout?: () => void } = {}) {
@@ -127,6 +129,9 @@ export function App({ onLogout }: { onLogout?: () => void } = {}) {
           </div>
         )}
         <nav className="header-actions">
+          <button type="button" className="btn ghost small" onClick={() => setView({ name: "backups" })}>
+            Backups
+          </button>
           <button type="button" className="btn ghost small" onClick={() => setView({ name: "activity" })}>
             Activity
           </button>
@@ -138,11 +143,23 @@ export function App({ onLogout }: { onLogout?: () => void } = {}) {
         </nav>
       </header>
 
-      {view.name === "activity" ? (
+      {view.name === "backups" ? (
+        <BackupsPage
+          workspaces={workspaces}
+          onBack={() => setView({ name: "list" })}
+          onOpenDatabase={(id) => {
+            void refreshWorkspaces();
+            setView({ name: "detail", databaseId: id });
+          }}
+        />
+      ) : view.name === "activity" ? (
         <ActivityPage onBack={() => setView({ name: "list" })} />
       ) : view.name === "detail" ? (
         <DatabaseDetail
+          key={view.databaseId}
           databaseId={view.databaseId}
+          workspaces={workspaces}
+          onOpenDatabase={(id) => setView({ name: "detail", databaseId: id })}
           onBack={() => setView({ name: "list" })}
         />
       ) : (

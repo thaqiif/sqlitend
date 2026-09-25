@@ -26,6 +26,9 @@ export const DatabaseStatusSchema = z.enum([
   "crashed",
   "failed",
   "deleting",
+  // Being restored from a backup replica (background job; auto_start stays 0
+  // until the restored file is verified and in place).
+  "restoring",
   // Read-coercion fallback for a corrupt/unparseable metadata row: the API
   // serves it visibly rather than 500ing the whole list. Never written by the
   // server — the supervisor only persists the six real states.
@@ -205,3 +208,24 @@ export const BackupStatusSchema = z.object({
   restarts: z.number().int(),
 });
 export type BackupStatus = z.infer<typeof BackupStatusSchema>;
+
+export const RestoreRequestSchema = z
+  .object({
+    name: z.string().min(1).max(128),
+    workspaceId: z.string().uuid(),
+    /** Point in time (RFC 3339, e.g. 2026-09-25T08:00:00Z); omitted = latest. */
+    at: z.string().datetime({ offset: true }).optional(),
+  })
+  .strict();
+export type RestoreRequest = z.infer<typeof RestoreRequestSchema>;
+
+export const ReplicaInfoSchema = z.object({
+  id: z.string(),
+  slug: z.string().optional(),
+  name: z.string().optional(),
+  workspaceId: z.string().optional(),
+  createdAt: z.number().optional(),
+  updatedAt: z.number().optional(),
+  exists: z.boolean(),
+});
+export type ReplicaInfo = z.infer<typeof ReplicaInfoSchema>;

@@ -151,6 +151,8 @@ export interface ReplicatorDeps {
   now?: () => number;
   reconcileMs?: number;
   log?: (msg: string) => void;
+  /** Called after a litestream process is spawned for a database. */
+  onLaunch?: (dbId: string) => void;
 }
 
 export class Replicator {
@@ -340,6 +342,7 @@ export class Replicator {
     };
     status.pid = child.pid ?? null;
     this.procs.set(row.id, p);
+    this.d.onLaunch?.(row.id);
 
     for (const stream of [child.stdout, child.stderr]) {
       if (stream) {

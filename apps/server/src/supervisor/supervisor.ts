@@ -46,7 +46,8 @@ export type DatabaseStatusValue =
   | "stopped"
   | "crashed"
   | "failed"
-  | "deleting";
+  | "deleting"
+  | "restoring";
 
 export interface SupervisorDeps {
   config: Config;
@@ -226,6 +227,8 @@ export class Supervisor {
     const row = this.deps.databases.getById(dbId);
     if (!row) return { ok: false, error: "database row no longer exists" };
     if (row.status === "deleting") return { ok: false, error: "database is being deleted" };
+    // A restore owns this row until it flips it to "starting" with the file in place.
+    if (row.status === "restoring") return { ok: false, error: "database is being restored" };
 
     // Already served by a tracked process (spawned this boot or adopted)?
     const child = this.children.get(dbId);

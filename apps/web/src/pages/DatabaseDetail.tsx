@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { BackupStatus, Connection, Database, Metrics, Token, TokenIssued } from "@sqlitend/shared";
+import type { BackupStatus, Connection, Database, Metrics, Token, TokenIssued, Workspace } from "@sqlitend/shared";
+import { RestoreDialog } from "../components/RestoreDialog";
 import { api } from "../api/client";
 import { MetricTiles } from "../components/MetricTiles";
 import { Modal } from "../components/Modal";
@@ -28,6 +29,8 @@ const METRIC_ERROR_THRESHOLD = 2;
 interface Props {
   databaseId: string;
   onBack: () => void;
+  workspaces?: Workspace[];
+  onOpenDatabase?: (id: string) => void;
 }
 
 function fmtTime(epochMs: number): string {
@@ -60,7 +63,8 @@ function CopyRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function DatabaseDetail({ databaseId, onBack }: Props) {
+export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenDatabase }: Props) {
+  const [showRestore, setShowRestore] = useState(false);
   const [db, setDb] = useState<Database | null>(null);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -115,6 +119,18 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
       clearInterval(backupTimer);
     };
   }, [databaseId]);
+
+  // A restore runs in the background: follow it until it finishes.
+  useEffect(() => {
+    if (db?.status !== "restoring") return;
+    const t = setInterval(async () => {
+      const d = await api.getDatabase(databaseId).catch(() => null);
+      if (!d) return;
+      setDb(d);
+      if (d.status !== "restoring") setConnection(await api.getConnection(databaseId).catch(() => null));
+    }, 2_000);
+    return () => clearInterval(t);
+  }, [db?.status, databaseId]);
 
   // Live metrics poll every 5s.
   useEffect(() => {
@@ -342,8 +358,21 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
         )}
       </section>
 
+      {db.status === "restoring" && (
+        <p className="muted" role="status">
+          Restoring from backup: downloading, verifying with integrity_check, then starting…
+        </p>
+      )}
+
       <section className="panel">
-        <h3 className="panel-title">Backup</h3>
+        <div className="panel-header">
+          <h3 className="panel-title">Backup</h3>
+          {backup?.enabled && (
+            <button type="button" className="btn ghost small" onClick={() => setShowRestore(true)}>
+              Restore as new database…
+            </button>
+          )}
+        </div>
         {!backup ? (
           <p className="muted">Loading…</p>
         ) : !backup.enabled ? (
@@ -391,6 +420,19 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
           databaseId={databaseId}
           onClose={() => setTokenForm(null)}
           onIssued={handleTokenIssued}
+        />
+      )}
+      {showRestore && (
+        <RestoreDialog
+          sourceId={db.id}
+          sourceLabel={db.slug}
+          workspaces={workspaces}
+          defaultWorkspaceId={db.workspaceId}
+          onClose={() => setShowRestore(false)}
+          onStarted={(created) => {
+            setShowRestore(false);
+            onOpenDatabase?.(created.id);
+          }}
         />
       )}
       {revealed && <TokenReveal token={revealed} onDismiss={() => setRevealed(null)} />}

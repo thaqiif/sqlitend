@@ -30,7 +30,8 @@ import { mintToken, dbKeyRelPath } from "../auth/tokens.ts";
 import { assertInside } from "../util/paths.ts";
 import type { DnsManager } from "../dns/manager.ts";
 import type { Replicator } from "../backup/replicator.ts";
-import type { BackupStatus } from "@sqlitend/shared";
+import type { RestoreService } from "../backup/restore.ts";
+import { RestoreRequestSchema, type BackupStatus, type RestoreRequest } from "@sqlitend/shared";
 import { installAuth, type AppEnv, type AuthDeps } from "./auth-routes.ts";
 import { maxSlugLength, parseHostTemplate, publicKeyFor, renderHost } from "../gateway/gateway.ts";
 
@@ -140,6 +141,7 @@ export interface RoutesDeps {
   dns?: DnsManager | null;
   /** Continuous S3 backup; absent when not configured. */
   backup?: Replicator | null;
+  restore?: RestoreService | null;
   /** Control-plane login; absent only with SQLITEND_AUTH=off (loopback dev). */
   auth?: AuthDeps | null;
 }
@@ -220,47 +222,8 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
       throw new ApiError(400, "bad_request", "invalid database payload", zodDetail(err));
     }
 
-    const slug = slugify(body.name);
-    if (hostTemplate && slug.length > maxSlugLength(hostTemplate)) {
-      throw new ApiError(
-        400,
-        "name_too_long",
-        `name is too long for a public hostname: slug "${slug}" exceeds ${maxSlugLength(hostTemplate)} characters`,
-      );
-    }
-    const id = randomUUID();
-    const dataDir = path.join(d.config.dataRoot, "workspaces", ws.slug, "dbs", slug);
-
-    // Reserve the explicit http+grpc pair before creating the row/spawning.
-    const pair = await d.supervisor.portAllocator.allocatePair();
-
-    let row: DbRow;
-    try {
-      row = d.databases.create({
-        id,
-        workspace_id: ws.id,
-        slug,
-        name: body.name,
-        status: "starting",
-        data_dir: dataDir,
-        auth_key: dbKeyRelPath(id), // documentation of the per-DB pub-file location
-        auto_start: 1,
-        created_at: Date.now(),
-      });
-    } catch (err) {
-      // The pair was reserved but no row will ever own it — release or the
-      // pool permanently shrinks by two ports per collision.
-      d.supervisor.portAllocator.release(pair);
-      if (err instanceof SlugExistsError) {
-        // Slugs are globally UNIQUE (across workspaces) — say so explicitly.
-        throw new ApiError(
-          409,
-          "slug_conflict",
-          `a database with slug "${slug}" already exists (slugs are global across workspaces)`,
-        );
-      }
-      throw err;
-    }
+    const { row, pair } = await reserveDatabase(ws, body.name, { status: "starting", autoStart: 1 });
+    const { id, data_dir: dataDir } = row;
     d.databases.updateRuntime(id, { port: pair.http, grpc_port: pair.grpc, status: "starting" });
 
     const started = await d.supervisor.startDatabase(id, {
@@ -290,6 +253,7 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     if (!d.sqldOk) throw new ApiError(503, "sqld_unavailable", `sqld binary not usable — run scripts/fetch-sqld.sh`);
     if (!row.port || !row.grpc_port) throw new ApiError(409, "no_ports", "database has no allocated ports");
     if (row.status === "deleting") throw new ApiError(409, "deleting", "database is being deleted");
+    assertNotRestoreTarget(row);
     const r = await d.supervisor.startDatabase(row.id, { port: row.port, grpcPort: row.grpc_port, dataDir: row.data_dir });
     if (!r.ok) {
       const fresh = d.databases.getById(row.id);
@@ -304,12 +268,14 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
   app.post("/api/databases/:id/stop", async (c) => {
     const row = requireDb(c.req.param("id"));
     if (row.status === "deleting") throw new ApiError(409, "deleting", "database is being deleted");
+    assertNotRestoreTarget(row);
     await d.supervisor.stopDatabase(row.id);
     return c.json(rowToDatabase(d.databases.getById(row.id)!));
   });
 
   app.delete("/api/databases/:id", async (c) => {
     const row = requireDb(c.req.param("id"));
+    if (d.restore?.isRestoring(row.id)) throw new ApiError(409, "restoring", "a restore into this database is still running");
     d.databases.updateStatus(row.id, "deleting");
     // killByDbId is serialized per-dbId (an in-flight start completes first)
     // and covers ADOPTED processes — the process MUST be dead before the data
@@ -375,6 +341,35 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     const { pid: _pid, ...s } = d.backup.status(id);
     return { enabled: true, ...s };
   };
+
+  // Replicas under this server's prefix, deleted databases included.
+  app.get("/api/backups/replicas", async (c) => {
+    if (!d.restore) throw new ApiError(409, "backup_disabled", "backups are not configured");
+    try {
+      return c.json(await d.restore.listReplicas());
+    } catch (err) {
+      throw new ApiError(502, "backup_store_error", "could not list replicas", (err as Error).message.slice(0, 300));
+    }
+  });
+
+  // Restore replica :id (an existing or deleted database) AS A NEW database.
+  app.post("/api/backups/:id/restore", async (c) => {
+    if (!d.restore) throw new ApiError(409, "backup_disabled", "backups are not configured");
+    if (!d.sqldOk) throw new ApiError(503, "sqld_unavailable", "sqld binary not usable — run scripts/fetch-sqld.sh");
+    const sourceId = c.req.param("id");
+    if (!/^[0-9a-f-]{36}$/.test(sourceId)) throw new ApiError(400, "bad_request", "invalid replica id");
+    let body: RestoreRequest;
+    try {
+      body = RestoreRequestSchema.parse(await c.req.json());
+    } catch (err) {
+      throw new ApiError(400, "bad_request", "invalid restore payload", zodDetail(err));
+    }
+    const ws = d.workspaces.getById(body.workspaceId);
+    if (!ws) throw new ApiError(404, "not_found", "workspace not found");
+    const { row } = await reserveDatabase(ws, body.name, { status: "restoring", autoStart: 0 });
+    d.restore.start(sourceId, row, body.at ? new Date(body.at).toISOString().replace(/\.\d{3}Z$/, "Z") : undefined);
+    return c.json(rowToDatabase(row), 202);
+  });
 
   app.get("/api/databases/:id/backup", (c) => c.json(backupStatus(requireDb(c.req.param("id")).id)));
 
@@ -486,6 +481,63 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
   });
 
   return app;
+
+  /** Validate name → slug, allocate the port pair and insert the row. Shared
+   *  by create and restore so both enforce the same slug/hostname rules. */
+  async function reserveDatabase(
+    ws: { id: string; slug: string },
+    name: string,
+    o: { status: DatabaseStatus; autoStart: 0 | 1 },
+  ): Promise<{ row: DbRow; pair: { http: number; grpc: number } }> {
+    const slug = slugify(name);
+    if (hostTemplate && slug.length > maxSlugLength(hostTemplate)) {
+      throw new ApiError(
+        400,
+        "name_too_long",
+        `name is too long for a public hostname: slug "${slug}" exceeds ${maxSlugLength(hostTemplate)} characters`,
+      );
+    }
+    const id = randomUUID();
+    const dataDir = path.join(d.config.dataRoot, "workspaces", ws.slug, "dbs", slug);
+    // Reserve the explicit http+grpc pair before creating the row/spawning.
+    const pair = await d.supervisor.portAllocator.allocatePair();
+    try {
+      const row = d.databases.create({
+        id,
+        workspace_id: ws.id,
+        slug,
+        name,
+        status: o.status,
+        data_dir: dataDir,
+        auth_key: dbKeyRelPath(id), // documentation of the per-DB pub-file location
+        auto_start: o.autoStart,
+        created_at: Date.now(),
+      });
+      d.databases.updateRuntime(id, { port: pair.http, grpc_port: pair.grpc });
+      return { row: d.databases.getById(id)!, pair };
+    } catch (err) {
+      // The pair was reserved but no row will ever own it — release or the
+      // pool permanently shrinks by two ports per collision.
+      d.supervisor.portAllocator.release(pair);
+      if (err instanceof SlugExistsError) {
+        // Slugs are globally UNIQUE (across workspaces) — say so explicitly.
+        throw new ApiError(409, "slug_conflict", `a database with slug "${slug}" already exists (slugs are global across workspaces)`);
+      }
+      throw err;
+    }
+  }
+
+  /** A restore target must never be started/stopped by hand: while restoring it
+   *  has no data file yet, and a failed restore has none either — starting it
+   *  would publish (and replicate) an empty database under the restored name. */
+  function assertNotRestoreTarget(row: DbRow): void {
+    if (row.status === "restoring" || d.restore?.isRestoring(row.id)) {
+      throw new ApiError(409, "restoring", "a restore into this database is still running");
+    }
+    if (row.status === "failed" && (row.failed_reason ?? "").startsWith("restore")) {
+      throw new ApiError(409, "restore_failed", "this database is a failed restore target — delete it and restore again");
+    }
+  }
 
   function requireDb(id: string): DbRow {
     const row = d.databases.getById(id);
