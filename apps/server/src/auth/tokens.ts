@@ -99,6 +99,8 @@ export interface MintTokenDeps {
   scope: TokenScope;
   /** Optional per-token TTL override (hours). Defaults to tokenTtlHours. */
   expiresInHours?: number;
+  /** Optional operator label. */
+  name?: string | null;
 }
 
 /**
@@ -137,5 +139,8 @@ export async function mintToken(deps: MintTokenDeps, tokenTtlHours: number): Pro
     expiresAt,
     token,
     dbSlug: deps.dbSlug,
+    name: deps.name ?? null,
+    revokedAt: null,
+    lastUsedAt: null,
   };
 }

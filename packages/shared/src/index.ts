@@ -89,8 +89,17 @@ export const TokenSchema = z.object({
   scope: TokenScopeSchema,
   createdAt: z.number().int(),
   expiresAt: z.number().int(),
+  /** Operator label, e.g. "worker-prod". Rotation = new token, same name. */
+  name: z.string().nullable().default(null),
+  /** Revoked tokens are refused by the gateway (sqld cannot revoke). */
+  revokedAt: z.number().int().nullable().default(null),
+  /** Last request seen through the gateway (throttled, ~1/min). */
+  lastUsedAt: z.number().int().nullable().default(null),
 });
 export type Token = z.infer<typeof TokenSchema>;
+
+export const ExpiringTokenSchema = TokenSchema.extend({ dbSlug: z.string(), expired: z.boolean() });
+export type ExpiringToken = z.infer<typeof ExpiringTokenSchema>;
 
 export const TokenIssuedSchema = TokenSchema.extend({
   token: z.string(),
@@ -106,6 +115,7 @@ export type TokenIssued = z.infer<typeof TokenIssuedSchema>;
 export const CreateTokenSchema = z
   .object({
     scope: z.literal("full").optional(),
+    name: z.string().trim().min(1).max(64).optional(),
     expiresInHours: z.number().int().positive().max(24 * 365).optional(),
   })
   .strict();

@@ -16,8 +16,7 @@ const BASE = "/api";
 
 /**
  * Raised for any non-2xx API response (and carries the shared ErrorBody shape)
- * so the UI can surface `{error:{code,message}}` consistently, including the
- * documented 501 `revocation_unsupported` case.
+ * so the UI can surface `{error:{code,message}}` consistently.
  */
 export class ApiError extends Error {
   readonly status: number;
@@ -126,7 +125,7 @@ export const api = {
     request<Token[]>(`/databases/${encodeURIComponent(id)}/tokens`),
 
   revokeToken: (id: string, jti: string) =>
-    request<void>(`/databases/${encodeURIComponent(id)}/tokens/${encodeURIComponent(jti)}`, {
+    request<Token>(`/databases/${encodeURIComponent(id)}/tokens/${encodeURIComponent(jti)}`, {
       method: "DELETE",
     }),
 

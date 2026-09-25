@@ -305,8 +305,44 @@ describe("start / stop routes", () => {
   });
 });
 
+describe("token management routes", () => {
+  test("POST names the token; GET lists name/revokedAt/lastUsedAt; bad name is 400", async () => {
+    const app = makeApp();
+    const d = databases.create(dbRow(wsId(), { slug: "named" }));
+    const res = await send(app, "POST", `/api/databases/${d.id}/tokens`, { name: "worker-prod", expiresInHours: 8760 });
+    expect(res.status).toBe(201);
+    const issued = (await res.json()) as { name: string; token: string; revokedAt: null };
+    expect(issued.name).toBe("worker-prod");
+    expect(issued.token.split(".")).toHaveLength(3);
+    const list = (await (await send(app, "GET", `/api/databases/${d.id}/tokens`)).json()) as { name: string; revokedAt: null; lastUsedAt: null }[];
+    expect(list).toEqual([expect.objectContaining({ name: "worker-prod", revokedAt: null, lastUsedAt: null })]);
+    expect((await send(app, "POST", `/api/databases/${d.id}/tokens`, { name: "" })).status).toBe(400);
+    expect((await send(app, "POST", `/api/databases/${d.id}/tokens`, { name: "x".repeat(65) })).status).toBe(400);
+  });
+
+  test("GET /api/tokens/expiring: within window, recent expiries only, excludes revoked", async () => {
+    const app = makeApp();
+    const d = databases.create(dbRow(wsId(), { slug: "exp" }));
+    const now = Date.now();
+    const mk = (jti: string, expiresAt: number) => tokens.create({ jti, databaseId: d.id, scope: "full", createdAt: now, expiresAt, name: jti });
+    mk("soon", now + 3 * 86_400_000);
+    mk("later", now + 60 * 86_400_000);
+    mk("dead", now - 1000);
+    mk("ancient", now - 30 * 86_400_000);
+    mk("revoked", now + 86_400_000);
+    tokens.revoke("revoked", now);
+    const res = (await (await send(app, "GET", "/api/tokens/expiring")).json()) as { jti: string; dbSlug: string; expired: boolean }[];
+    expect(res.map((t) => [t.jti, t.expired, t.dbSlug])).toEqual([["dead", true, "exp"], ["soon", false, "exp"]]);
+    const wide = (await (await send(app, "GET", "/api/tokens/expiring?withinDays=90")).json()) as unknown[];
+    expect(wide).toHaveLength(3);
+    const withOld = (await (await send(app, "GET", "/api/tokens/expiring?expiredWithinDays=60")).json()) as { jti: string }[];
+    expect(withOld.map((t) => t.jti)).toEqual(["ancient", "dead", "soon"]);
+    expect((await send(app, "GET", "/api/tokens/expiring?withinDays=-1")).status).toBe(400);
+  });
+});
+
 describe("delete / tokens / metrics routes", () => {
-  test("DELETE /api/databases/:id -> 204 and removes the data dir; unknown -> 404; token -> 501", async () => {
+  test("DELETE /api/databases/:id -> 204 and removes the data dir; unknown -> 404; token revoke", async () => {
     const app = makeApp();
     const dataDir = path.join(dir, "workspaces", "ws", "dbs", "delme");
     mkdirSync(dataDir, { recursive: true });
@@ -326,9 +362,15 @@ describe("delete / tokens / metrics routes", () => {
     const tok = databases.create(dbRow(wsId(), { slug: "tokdb" }));
     const t = tokens.create({ jti: uid(), databaseId: tok.id, scope: "full", createdAt: Date.now(), expiresAt: Date.now() + 3600_000 });
     const revoke = await send(app, "DELETE", `/api/databases/${tok.id}/tokens/${t.jti}`, {});
-    expect(revoke.status).toBe(501);
-    const revokeBody = (await revoke.json()) as { error: { code: string } };
-    expect(revokeBody.error.code).toBe("revocation_unsupported");
+    expect(revoke.status).toBe(200);
+    const revokedAt = ((await revoke.json()) as { revokedAt: number }).revokedAt;
+    expect(revokedAt).toBeGreaterThan(0);
+    // Idempotent: the first revocation time is kept.
+    const again = (await (await send(app, "DELETE", `/api/databases/${tok.id}/tokens/${t.jti}`, {})).json()) as { revokedAt: number };
+    expect(again.revokedAt).toBe(revokedAt);
+    // A token of another database is not reachable through this one.
+    const other = databases.create(dbRow(wsId(), { slug: "otherdb" }));
+    expect((await send(app, "DELETE", `/api/databases/${other.id}/tokens/${t.jti}`, {})).status).toBe(404);
   });
 
   test("DELETE keeps parent dirs when a sibling database still exists", async () => {

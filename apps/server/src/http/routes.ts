@@ -21,7 +21,7 @@ import type { Config } from "../config.ts";
 import type { WorkspacesRepo } from "../db/repos/workspaces.ts";
 import type { DatabasesRepo, DatabaseRow as DbRow } from "../db/repos/databases.ts";
 import { SlugExistsError } from "../db/repos/databases.ts";
-import type { TokensRepo } from "../db/repos/tokens.ts";
+import type { TokenRow, TokensRepo } from "../db/repos/tokens.ts";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { Supervisor } from "../supervisor/supervisor.ts";
 import type { Sampler } from "../metrics/sampler.ts";
@@ -70,7 +70,6 @@ function rowToDatabase(r: DbRow): DatabaseDto {
   };
 }
 
-type TokenRow = { jti: string; database_id: string; scope: string; created_at: number; expires_at: number };
 function rowToToken(r: TokenRow) {
   return {
     jti: r.jti,
@@ -78,6 +77,9 @@ function rowToToken(r: TokenRow) {
     scope: r.scope === "ro" ? ("ro" as const) : ("full" as const),
     createdAt: r.created_at,
     expiresAt: r.expires_at,
+    name: r.name ?? null,
+    revokedAt: r.revoked_at ?? null,
+    lastUsedAt: r.last_used_at ?? null,
   };
 }
 
@@ -371,28 +373,56 @@ export function createRoutes(d: RoutesDeps): Hono {
     // STRICT parse — a malformed scope or TTL must be a 400, never a silent
     // fallback to defaults (the old catch-all granted `full` for any parse
     // failure, silently upgrading an intended read-only request).
-    let body: { scope?: "full"; expiresInHours?: number };
+    let body: { scope?: "full"; name?: string; expiresInHours?: number };
     try {
       body = CreateTokenSchema.parse(await c.req.json());
     } catch (err) {
       throw new ApiError(400, "bad_request", "invalid token payload", zodDetail(err));
     }
-    const issued = await mintToken({ dataRoot: d.config.dataRoot, dbSlug: row.slug, dbId: row.id, scope: body.scope ?? "full", expiresInHours: body.expiresInHours }, d.config.tokenTtlHours);
+    const issued = await mintToken({ dataRoot: d.config.dataRoot, dbSlug: row.slug, dbId: row.id, scope: body.scope ?? "full", expiresInHours: body.expiresInHours, name: body.name ?? null }, d.config.tokenTtlHours);
     d.tokens.create({
       jti: issued.jti,
       databaseId: row.id,
       scope: issued.scope,
       createdAt: issued.createdAt,
       expiresAt: issued.expiresAt,
+      name: issued.name,
     });
     return c.json(issued, 201);
   });
 
-  app.delete("/api/databases/:id/tokens/:jti", () => {
-    throw new ApiError(
-      501,
-      "revocation_unsupported",
-      "sqld validates JWT access tokens statelessly, so a token cannot be revoked before it expires. Use a short expiry (SQLITEND_TOKEN_TTL_HOURS); to invalidate all tokens for a database, delete and re-create it (this re-keys the database).",
+  // Revocation is enforced by the gateway: sqld validates JWTs statelessly and
+  // cannot revoke, so direct sqld ports keep accepting a revoked token until it
+  // expires (bind SQLITEND_HOST=127.0.0.1 so only the gateway is reachable).
+  app.delete("/api/databases/:id/tokens/:jti", (c) => {
+    const row = requireDb(c.req.param("id"));
+    const tok = d.tokens.getByJti(c.req.param("jti"));
+    if (!tok || tok.database_id !== row.id) throw new ApiError(404, "not_found", "token not found");
+    d.tokens.revoke(tok.jti, Date.now());
+    return c.json(rowToToken(d.tokens.getByJti(tok.jti)!));
+  });
+
+  // Tokens needing attention across all databases: non-revoked, expiring
+  // within `withinDays` (default 14) or expired within the last
+  // `expiredWithinDays` (default 7, so old expiries stop alerting). For alerts.
+  app.get("/api/tokens/expiring", (c) => {
+    const days = (name: string, fallback: number) => {
+      const raw = c.req.query(name);
+      const n = raw === undefined ? fallback : Number(raw);
+      if (!Number.isInteger(n) || n < 0 || n > 3650) {
+        throw new ApiError(400, "bad_request", `${name} must be an integer between 0 and 3650`);
+      }
+      return n;
+    };
+    const ahead = days("withinDays", 14);
+    const back = days("expiredWithinDays", 7);
+    const now = Date.now();
+    return c.json(
+      d.tokens.listExpiringBetween(now - back * 86_400_000, now + ahead * 86_400_000).map((r) => ({
+        ...rowToToken(r),
+        dbSlug: r.db_slug,
+        expired: r.expires_at <= now,
+      })),
     );
   });
 

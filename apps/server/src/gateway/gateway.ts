@@ -83,6 +83,47 @@ export function keyFromHost(tpl: HostTemplate, hostHeader: string | null): strin
   return key;
 }
 
+/** Why the gateway refused a token (logged, never sent to the client). */
+export type TokenDenial =
+  | "missing" | "malformed" | "unknown" | "wrong_database" | "revoked" | "expired" | "bad_signature" | "no_key";
+
+export interface GatewayTokenRecord {
+  database_id: string;
+  expires_at: number;
+  revoked_at: number | null;
+}
+
+/** Pull `jti` out of `Authorization: Bearer <jwt>`. Parsing only — the
+ *  signature is verified separately (verifySignature), never trusted from here. */
+export function jtiFromAuthorization(header: string | null): string | null | "malformed" {
+  if (!header) return null;
+  const m = /^Bearer\s+([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]*)$/i.exec(header.trim());
+  if (!m) return "malformed";
+  try {
+    const payload = JSON.parse(Buffer.from(m[2]!, "base64url").toString("utf8")) as { jti?: unknown };
+    return typeof payload.jti === "string" && payload.jti.length > 0 ? payload.jti : "malformed";
+  } catch {
+    return "malformed";
+  }
+}
+
+export function checkToken(
+  header: string | null,
+  dbId: string,
+  lookup: (jti: string) => GatewayTokenRecord | null,
+  now: number,
+): { ok: true; jti: string } | { ok: false; reason: TokenDenial } {
+  const jti = jtiFromAuthorization(header);
+  if (jti === null) return { ok: false, reason: "missing" };
+  if (jti === "malformed") return { ok: false, reason: "malformed" };
+  const rec = lookup(jti);
+  if (!rec) return { ok: false, reason: "unknown" };
+  if (rec.database_id !== dbId) return { ok: false, reason: "wrong_database" };
+  if (rec.revoked_at !== null) return { ok: false, reason: "revoked" };
+  if (rec.expires_at <= now) return { ok: false, reason: "expired" };
+  return { ok: true, jti };
+}
+
 export interface GatewayDeps {
   template: HostTemplate;
   /** Lookup by slug or id. */
@@ -92,6 +133,17 @@ export interface GatewayDeps {
   maxBodyBytes: number;
   /** Upper bound for one proxied request, ms. */
   upstreamTimeoutMs?: number;
+  /** Token allowlist. When set, only known, live, correctly-bound, validly
+   *  signed tokens pass. The gateway verifies the signature itself so it does
+   *  not depend on sqld having been launched with its key. */
+  tokens?: {
+    lookup: (jti: string) => GatewayTokenRecord | null;
+    /** Verify the JWT signature with this database's key; "no_key" if the DB has none. */
+    verifySignature: (dbId: string, jwt: string) => Promise<true | "bad_signature" | "no_key">;
+    /** Called for every accepted request; the caller throttles writes. */
+    onUsed?: (jti: string, at: number) => void;
+  };
+  now?: () => number;
   fetchImpl?: typeof fetch;
 }
 
@@ -108,6 +160,22 @@ export function lookupByKey(
 function stripHopByHop(h: Headers): void {
   const named = (h.get("connection") ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
   for (const name of [...HOP_BY_HOP, ...named]) h.delete(name);
+}
+
+// Denials are attacker-triggerable: log at most one line per db+reason per 10 s,
+// with the number suppressed since the last line.
+const denials = new Map<string, { at: number; suppressed: number }>();
+function denialLog(slug: string, reason: TokenDenial, now = Date.now()): void {
+  const key = `${slug}:${reason}`;
+  const cur = denials.get(key);
+  if (cur && now - cur.at < 10_000) {
+    cur.suppressed++;
+    return;
+  }
+  const extra = cur?.suppressed ? ` (+${cur.suppressed} suppressed)` : "";
+  denials.set(key, { at: now, suppressed: 0 });
+  if (denials.size > 10_000) denials.clear();
+  console.warn(`[gateway] denied ${slug}: token ${reason}${extra}`);
 }
 
 function plain(status: number, body: string): Response {
@@ -128,14 +196,35 @@ export function createGatewayHandler(d: GatewayDeps): (req: Request) => Promise<
     // unauthenticated callers cannot enumerate which names exist.
     if (!row || !row.port || row.status !== "running") return plain(404, "not found");
 
+    if (d.tokens) {
+      const now = (d.now ?? Date.now)();
+      const auth = req.headers.get("authorization");
+      const verdict = checkToken(auth, row.id, d.tokens.lookup, now);
+      const sig = verdict.ok ? await d.tokens.verifySignature(row.id, auth!.trim().replace(/^bearer\s+/i, "")) : null;
+      if (!verdict.ok || sig !== true) {
+        // Same 404 as an unknown database; the reason is for the operator only.
+        denialLog(row.slug, verdict.ok ? (sig as TokenDenial) : verdict.reason);
+        return plain(404, "not found");
+      }
+      d.tokens.onUsed?.(verdict.jti, now);
+    }
+
     const cl = Number(req.headers.get("content-length") ?? "0");
     if (Number.isFinite(cl) && cl > d.maxBodyBytes) return plain(413, "payload too large");
 
     const url = new URL(req.url);
-    const target = `http://${d.upstreamHost}:${row.port}${url.pathname}${url.search}`;
+    // With the allowlist on, the query string is dropped: Hrana needs none, and
+    // sqld must not get a second place to read credentials from.
+    const target = `http://${d.upstreamHost}:${row.port}${url.pathname}${d.tokens ? "" : url.search}`;
 
     const headers = new Headers(req.headers);
     stripHopByHop(headers);
+    if (d.tokens) {
+      // Only the Authorization value we just checked reaches sqld.
+      for (const [name] of [...headers]) {
+        if (name !== "authorization" && /auth|token|jwt/i.test(name)) headers.delete(name);
+      }
+    }
     // Ask for identity: fetch transparently decodes compressed bodies, which
     // would leave a stale content-encoding on the relayed response.
     headers.set("accept-encoding", "identity");

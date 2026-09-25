@@ -31,6 +31,7 @@ import { createStaticHandler, isAllowedHost } from "./http/static.ts";
 import { createGatewayHandler, lookupByKey, parseHostTemplate } from "./gateway/gateway.ts";
 import { CloudflareDns } from "./dns/cloudflare.ts";
 import { DnsManager } from "./dns/manager.ts";
+import { createSignatureVerifier } from "./auth/verify.ts";
 
 export const VERSION = "0.1.0";
 
@@ -205,9 +206,16 @@ const gatewayServer = config.gatewayPort > 0 && config.gatewayHostTemplate
         upstreamHost: ["0.0.0.0", "::", "*"].includes(config.host) ? "127.0.0.1" : config.host,
         maxBodyBytes: config.gatewayMaxBodyBytes,
         upstreamTimeoutMs: 240_000,
+        tokens: { lookup: (jti) => tokens.getByJti(jti), verifySignature: signatureVerifier(), onUsed: throttledTouch() },
       }),
     })
   : null;
+if (gatewayServer && !["127.0.0.1", "::1", "localhost"].includes(config.host)) {
+  console.warn(
+    `[gateway] WARNING: SQLITEND_HOST=${config.host} exposes sqld ports directly; token revocation is only ` +
+      `enforced through the gateway. Set SQLITEND_HOST=127.0.0.1 in production.`,
+  );
+}
 if (gatewayServer) {
   console.log(`[gateway] listening on http://${config.gatewayHost}:${gatewayServer.port} for ${config.gatewayHostTemplate}`);
 }
@@ -261,4 +269,18 @@ function warnUnregisteredDataDirs(): void {
   } catch {
     /* best-effort boot warning only */
   }
+}
+
+/** last_used_at writes at most once a minute per token. */
+function throttledTouch(): (jti: string, at: number) => void {
+  const last = new Map<string, number>();
+  return (jti, at) => {
+    if ((last.get(jti) ?? 0) > at - 60_000) return;
+    last.set(jti, at);
+    tokens.touchLastUsed(jti, at);
+  };
+}
+
+function signatureVerifier() {
+  return createSignatureVerifier(config.dataRoot);
 }
