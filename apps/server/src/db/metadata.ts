@@ -3,6 +3,7 @@ import { chmodSync } from "node:fs";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { DatabasesRepo } from "./repos/databases.ts";
+import { AuthRepo } from "./repos/auth.ts";
 import { TokensRepo } from "./repos/tokens.ts";
 import { WorkspacesRepo } from "./repos/workspaces.ts";
 
@@ -21,7 +22,7 @@ export interface Migration {
  *  so the exact SQL text lives in migrations/. */
 export function migrations(): Migration[] {
   const dir = path.join(import.meta.dir, "migrations");
-  const files = ["001_init.sql", "002_failed_reason.sql", "003_dns.sql", "004_token_management.sql"];
+  const files = ["001_init.sql", "002_failed_reason.sql", "003_dns.sql", "004_token_management.sql", "005_auth.sql"];
   return files.map((f) => ({ id: f.replace(/\.sql$/, ""), sql: readFileSync(path.join(dir, f), "utf8") }));
 }
 
@@ -82,6 +83,7 @@ export interface Metadata {
   workspaces: WorkspacesRepo;
   databases: DatabasesRepo;
   tokens: TokensRepo;
+  auth: AuthRepo;
 }
 
 /** Convenience: open + migrate + wire up the three repos. */
@@ -94,5 +96,6 @@ export function openMetadata(dbPath: string): Metadata {
     workspaces: new WorkspacesRepo(db),
     databases: new DatabasesRepo(db),
     tokens: new TokensRepo(db),
+    auth: new AuthRepo(db),
   };
 }

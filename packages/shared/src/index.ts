@@ -164,3 +164,26 @@ export const ErrorBodySchema = z.object({
   }),
 });
 export type ErrorBody = z.infer<typeof ErrorBodySchema>;
+
+// ---------------------------------------------------------------------------
+// Control-plane auth + audit
+// ---------------------------------------------------------------------------
+export const SessionInfoSchema = z.object({
+  setupRequired: z.boolean(),
+  authenticated: z.boolean(),
+  totpEnabled: z.boolean(),
+  expiresAt: z.number().int().nullable(),
+});
+export type SessionInfo = z.infer<typeof SessionInfoSchema>;
+
+export const AuditEntrySchema = z.object({
+  id: z.number().int(),
+  at: z.number().int(),
+  actor: z.string(),
+  ip: z.string().nullable(),
+  action: z.string(),
+  target: z.string().nullable(),
+  outcome: z.enum(["ok", "denied", "error"]),
+  detail: z.string().nullable(),
+});
+export type AuditEntry = z.infer<typeof AuditEntrySchema>;

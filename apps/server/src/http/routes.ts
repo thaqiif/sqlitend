@@ -29,6 +29,7 @@ import { PortExhaustedError } from "../supervisor/ports.ts";
 import { mintToken, dbKeyRelPath } from "../auth/tokens.ts";
 import { assertInside } from "../util/paths.ts";
 import type { DnsManager } from "../dns/manager.ts";
+import { installAuth, type AppEnv, type AuthDeps } from "./auth-routes.ts";
 import { maxSlugLength, parseHostTemplate, publicKeyFor, renderHost } from "../gateway/gateway.ts";
 
 // ---------------------------------------------------------------------------
@@ -135,10 +136,12 @@ export interface RoutesDeps {
   version: string;
   /** Cloudflare DNS automation; absent when disabled. */
   dns?: DnsManager | null;
+  /** Control-plane login; absent only with SQLITEND_AUTH=off (loopback dev). */
+  auth?: AuthDeps | null;
 }
 
-export function createRoutes(d: RoutesDeps): Hono {
-  const app = new Hono();
+export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
+  const app = new Hono<AppEnv>();
   const hostTemplate = d.config.gatewayHostTemplate ? parseHostTemplate(d.config.gatewayHostTemplate) : null;
 
   // Request log — every API call leaves one line (method, path, status, ms).
@@ -147,6 +150,8 @@ export function createRoutes(d: RoutesDeps): Hono {
     await next();
     console.log(`[api] ${c.req.method} ${c.req.path} -> ${c.res.status} (${Date.now() - t0}ms)`);
   });
+
+  if (d.auth) installAuth(app, d.auth);
 
   // ---- system -------------------------------------------------------------
   // Note: dataRoot/sqldPath are deliberately NOT exposed over the API (an

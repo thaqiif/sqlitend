@@ -27,11 +27,14 @@ import { Supervisor } from "./supervisor/supervisor.ts";
 import { sqldVersion } from "./supervisor/launcher.ts";
 import { Sampler, type SamplerRow } from "./metrics/sampler.ts";
 import { createRoutes } from "./http/routes.ts";
+import type { AppEnv } from "./http/auth-routes.ts";
 import { createStaticHandler, isAllowedHost } from "./http/static.ts";
 import { createGatewayHandler, lookupByKey, parseHostTemplate } from "./gateway/gateway.ts";
 import { CloudflareDns } from "./dns/cloudflare.ts";
 import { DnsManager } from "./dns/manager.ts";
 import { createSignatureVerifier } from "./auth/verify.ts";
+import { AuthService } from "./auth/session.ts";
+import { clientIp } from "./http/client-ip.ts";
 
 export const VERSION = "0.1.0";
 
@@ -59,7 +62,7 @@ const metadata: Metadata = await (async () => {
     throw err;
   }
 })();
-const { workspaces, databases, tokens } = metadata;
+const { workspaces, databases, tokens, auth: authRepo } = metadata;
 
 // ---------------------------------------------------------------------------
 // sqld boot smoke
@@ -121,7 +124,12 @@ if (dns) {
   );
 }
 
+const authService = config.authEnabled ? new AuthService(authRepo) : null;
+if (!config.authEnabled) console.warn("[auth] WARNING: SQLITEND_AUTH=off — the control plane has no login (loopback dev only)");
+else if (!authService!.setupDone) console.warn("[auth] no admin password yet — run `sqlitend set-password` to enable the dashboard");
+
 const routes = createRoutes({
+  auth: authService ? { service: authService, repo: authRepo, cookieSecure: config.cookieSecure } : null,
   dns,
   config,
   workspaces,
@@ -133,7 +141,7 @@ const routes = createRoutes({
   sqldVersion: sqldVer,
   version: VERSION,
 });
-const api = new Hono().route("/", routes);
+const api = new Hono<AppEnv>().route("/", routes);
 
 // Serve the SPA build from apps/web/dist with an index.html fallback.
 const serveStatic = createStaticHandler(path.resolve(import.meta.dir, "../../web/dist"));
@@ -144,7 +152,7 @@ const server = Bun.serve({
   // Hard cap even when a request sends no content-length (chunked bodies): the
   // per-request check below is fast-path, this is the floor.
   maxRequestBodySize: config.maxBodyBytes,
-  fetch(req: Request): Response | Promise<Response> {
+  fetch(req: Request, srv): Response | Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname.startsWith("/api")) {
       // Host allowlist: the API answers only when addressed as this listener
@@ -163,7 +171,7 @@ const server = Bun.serve({
       if (req.method !== "GET" && req.method !== "HEAD" && rateLimited()) {
         return new Response("Too Many Requests", { status: 429 });
       }
-      return api.fetch(req);
+      return api.fetch(req, { ip: clientIp(req, srv.requestIP(req)?.address ?? null, config.trustProxy) });
     }
     return serveStatic(url.pathname);
   },

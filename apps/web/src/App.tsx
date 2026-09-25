@@ -3,14 +3,17 @@ import type { SystemInfo, Workspace } from "@sqlitend/shared";
 import { api } from "./api/client";
 import { DatabasesPage } from "./pages/DatabasesPage";
 import { DatabaseDetail } from "./pages/DatabaseDetail";
+import { ActivityPage } from "./pages/ActivityPage";
 
 const SYSTEM_POLL_MS = 30_000;
 
 type View =
   | { name: "list" }
-  | { name: "detail"; databaseId: string };
+  | { name: "detail"; databaseId: string }
+  | { name: "activity" };
 
-export function App() {
+/** `onLogout` is absent when the server runs without auth (SQLITEND_AUTH=off). */
+export function App({ onLogout }: { onLogout?: () => void } = {}) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
@@ -123,9 +126,21 @@ export function App() {
             )}
           </div>
         )}
+        <nav className="header-actions">
+          <button type="button" className="btn ghost small" onClick={() => setView({ name: "activity" })}>
+            Activity
+          </button>
+          {onLogout && (
+            <button type="button" className="btn ghost small" onClick={onLogout}>
+              Log out
+            </button>
+          )}
+        </nav>
       </header>
 
-      {view.name === "detail" ? (
+      {view.name === "activity" ? (
+        <ActivityPage onBack={() => setView({ name: "list" })} />
+      ) : view.name === "detail" ? (
         <DatabaseDetail
           databaseId={view.databaseId}
           onBack={() => setView({ name: "list" })}

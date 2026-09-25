@@ -89,12 +89,36 @@ too — connection URLs advertise `SQLITEND_PUBLIC_HOST` (set it to the machine'
 your Tailscale IP or a DNS name).
 
 The API answers only requests addressed to its listener **by IP or the configured host**; DNS
-hostnames are refused (`403`), which blocks DNS-rebinding attacks. The management surface itself
-has **no login in v1** — anyone who can reach the listener can manage workspaces/databases and
-mint database tokens — so on a public network put it behind a firewall, an authenticated reverse
-proxy, or a Tailscale ACL. Database access itself stays protected by the per-database signing
-keys: connecting to a `sqld` port without that database's token is rejected (see
-[Auth note](#auth-note)).
+hostnames are refused (`403`), which blocks DNS-rebinding attacks. Database access itself stays
+protected by the per-database signing keys: connecting to a `sqld` port without that database's
+token is rejected (see [Auth note](#auth-note)).
+
+### Login
+
+The dashboard and API require a login. The password is set **on the server only**, so there is no
+"first visitor claims it" page:
+
+```sh
+sqlitend set-password      # argon2id; ends all sessions
+sqlitend enable-totp       # optional authenticator-app second factor
+sqlitend disable-totp
+sqlitend revoke-sessions   # log out everywhere
+sqlitend audit 50          # last 50 audit entries
+```
+
+- **Sessions:** an HttpOnly, SameSite=Strict cookie. It ends after 12 h idle or 7 days, and on
+  logout, a password or TOTP change, or `revoke-sessions`. Only a hash of the session id is stored.
+- **Throttling:** 5 failed logins per IP (and 50 overall) within 15 minutes → `429` until the
+  window passes.
+- **CSRF:** every state-changing API call must send `X-Sqlitend-Csrf: 1` (the UI does this).
+- **Audit log:** every login (including failures) and every change is recorded with actor, IP,
+  target and outcome. See it in the UI under **Activity**, via `GET /api/audit`, or with
+  `sqlitend audit`.
+- Settings for the server and the CLI live in `~/.config/sqlitend/env`, which the launcher and the
+  systemd unit both read.
+- `SQLITEND_AUTH=off` disables login and is refused unless `SQLITEND_HOST` is loopback (local dev).
+- Still expose the control plane only over SSH or Tailscale. The login is a second line of defence,
+  not a reason to publish port 6100.
 
 ## Provisioning
 

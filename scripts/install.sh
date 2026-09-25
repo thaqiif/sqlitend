@@ -128,12 +128,41 @@ fi
 log "building web UI …"
 "$BUN" run build >/dev/null
 
+# --- settings file (shared by launcher + systemd; holds secrets → 0600) ---------
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/sqlitend"
+if [ ! -f "$CONF_DIR/env" ]; then
+  (umask 077 && mkdir -p "$CONF_DIR" && cat > "$CONF_DIR/env" <<'ENVEOF'
+# sqlitend settings: plain KEY=value lines only (read by systemd EnvironmentFile
+# and by the launcher). Keep this file mode 0600 — it holds API tokens.
+# See .env.example in the repo for every option.
+SQLITEND_HOST=127.0.0.1
+ENVEOF
+  )
+  log "settings  : created $CONF_DIR/env (0600)"
+fi
+
 # --- launcher ------------------------------------------------------------------
 mkdir -p "$BIN_DIR"
 cat > "$BIN_DIR/sqlitend" <<EOF
 #!/usr/bin/env bash
 # sqlitend launcher (installed by scripts/install.sh).
-# Kills the previous instance, then starts the server. Ctrl+C stops it.
+# Settings live in ~/.config/sqlitend/env (shared with the systemd unit), so
+# the server and the operator CLI always use the same data root.
+export SQLITEND_DATA_ROOT="\${SQLITEND_DATA_ROOT:-$DATA_DIR}"
+ENV_FILE="\${XDG_CONFIG_HOME:-\$HOME/.config}/sqlitend/env"
+if [ -f "\$ENV_FILE" ]; then
+  case "\$(stat -c %a "\$ENV_FILE" 2>/dev/null || stat -f %Lp "\$ENV_FILE")" in
+    *00) ;;
+    *) echo "sqlitend: WARNING: \$ENV_FILE is readable by others (it may hold API tokens): chmod 600 it" >&2 ;;
+  esac
+  set -a; . "\$ENV_FILE"; set +a
+fi
+# With an operator command (set-password, enable-totp, disable-totp,
+# revoke-sessions, audit) runs the CLI; otherwise starts the server.
+case "\${1:-}" in
+  set-password|enable-totp|disable-totp|revoke-sessions|audit)
+    exec "$BUN" run --cwd "$APP_DIR" apps/server/src/cli.ts "\$@" ;;
+esac
 exec "$BUN" run --cwd "$APP_DIR" apps/server/src/index.ts "\$@"
 EOF
 chmod +x "$BIN_DIR/sqlitend"
@@ -152,6 +181,7 @@ After=network.target
 Type=simple
 WorkingDirectory=$APP_DIR
 Environment=SQLITEND_DATA_ROOT=$DATA_DIR
+EnvironmentFile=-%h/.config/sqlitend/env
 ExecStart=$BUN run --cwd $APP_DIR apps/server/src/index.ts
 Restart=on-failure
 

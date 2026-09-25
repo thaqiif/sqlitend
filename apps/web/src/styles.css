@@ -743,3 +743,13 @@ code, pre {
     grid-template-columns: 1fr;
   }
 }
+
+/* Auth + activity */
+.auth-shell { max-width: 420px; margin: 10vh auto 0; }
+.auth-panel { display: flex; flex-direction: column; gap: 0.75rem; }
+.code-block { background: rgba(127, 127, 127, 0.12); padding: 0.6rem 0.8rem; border-radius: 6px; font-family: ui-monospace, monospace; }
+.header-actions { display: flex; gap: 0.5rem; margin-left: auto; }
+.audit-ok { color: var(--ok); }
+.audit-denied { color: var(--warn); }
+.audit-error { color: var(--danger); }
+.mono { font-family: ui-monospace, monospace; font-size: 0.8rem; }

@@ -45,6 +45,14 @@ export interface Config {
   gatewayHostTemplate: string | null;
   /** Max proxied request body, bytes (Hrana batches can be large). */
   gatewayMaxBodyBytes: number;
+  /** Control-plane login. false only for loopback-bound local development. */
+  authEnabled: boolean;
+  /** Client-IP source when the control plane sits behind a local proxy/tunnel:
+   *  "off" = socket peer; "cloudflare" = CF-Connecting-IP; "xff" = last X-Forwarded-For hop.
+   *  Headers are only honoured when the socket peer is loopback. */
+  trustProxy: "off" | "cloudflare" | "xff";
+  /** Session cookie Secure flag: "auto" = when the request is HTTPS; "on" = always. */
+  cookieSecure: "auto" | "on";
   /** Cloudflare DNS automation; null when disabled. Requires the gateway. */
   cloudflareDns: { apiToken: string; zoneId: string; tunnelId: string; apiBase: string } | null;
 }
@@ -114,6 +122,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     maxBodyBytes: parsePositiveInt("SQLITEND_MAX_BODY_BYTES", env.SQLITEND_MAX_BODY_BYTES, 1_000_000, 1024, 64 * 1024 * 1024),
     ...loadGatewayConfig(env),
     cloudflareDns: loadCloudflareDnsConfig(env),
+    authEnabled: loadAuthEnabled(env, host),
+    trustProxy: oneOf("SQLITEND_TRUST_PROXY", env.SQLITEND_TRUST_PROXY, ["off", "cloudflare", "xff"] as const, "off"),
+    cookieSecure: oneOf("SQLITEND_COOKIE_SECURE", env.SQLITEND_COOKIE_SECURE, ["auto", "on"] as const, "auto"),
     ...overrides,
   };
 }
@@ -147,4 +158,21 @@ function loadCloudflareDnsConfig(env: NodeJS.ProcessEnv): Config["cloudflareDns"
   }
   if (!/^[0-9a-f-]{36}$/i.test(tunnelId)) throw new Error(`invalid SQLITEND_CF_TUNNEL_ID: "${tunnelId}" (expected the tunnel UUID)`);
   return { apiToken, zoneId, tunnelId, apiBase: env.SQLITEND_CF_API_BASE?.trim() || "https://api.cloudflare.com/client/v4" };
+}
+
+function loadAuthEnabled(env: NodeJS.ProcessEnv, host: string): boolean {
+  const raw = (env.SQLITEND_AUTH ?? "on").trim().toLowerCase();
+  if (raw === "on" || raw === "") return true;
+  if (raw !== "off") throw new Error(`invalid SQLITEND_AUTH: "${env.SQLITEND_AUTH}" (expected on|off)`);
+  if (!["127.0.0.1", "::1", "localhost"].includes(host)) {
+    throw new Error(`SQLITEND_AUTH=off is only allowed with a loopback SQLITEND_HOST (got ${host})`);
+  }
+  return false;
+}
+
+function oneOf<T extends string>(name: string, raw: string | undefined, allowed: readonly T[], fallback: T): T {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (v === "") return fallback;
+  if (!(allowed as readonly string[]).includes(v)) throw new Error(`invalid ${name}: "${raw}" (expected ${allowed.join("|")})`);
+  return v as T;
 }
