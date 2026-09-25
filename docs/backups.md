@@ -135,7 +135,7 @@ This brings a database from another host (for example a namespace from a plain `
    places it where sqld expects it and starts it. Then the usual start-up steps run: its DNS record is created and
    Litestream replication begins. While this runs the database shows `restoring` and cannot be started,
    stopped or deleted. On any problem it becomes `failed` with `import failed: …` and nothing is published.
-4. The source file is never opened by SQLite, so it is left byte for byte as it was. Delete it from `imports/` once the new database checks out.
+4. The import works only on its own copy. The source stays byte for byte as it was (the listing only opens it read-only). Delete it from `imports/` once the new database checks out.
 
 Tokens are **not** carried over. Mint a new token for the new hostname and give it to the app.
 

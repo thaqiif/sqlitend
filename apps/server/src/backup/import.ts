@@ -7,8 +7,8 @@
 // owned by the service user. The API names it by basename only, so no request
 // can make the server read an arbitrary path.
 //
-// The source is never opened by SQLite: its bytes are copied into the staging
-// dir first, and everything else works on that private copy. A -wal, -shm or
+// The import never opens the source with SQLite (the listing only opens it
+// read-only): its bytes are copied into the staging dir first, and everything else works on that private copy. A -wal, -shm or
 // -journal next to the source is REFUSED rather than merged: nothing ties a
 // WAL to its database, so a stale or foreign one would silently replay wrong
 // pages. The copy is compacted with `VACUUM INTO` and verified like a restore
@@ -17,7 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import { Database as SQLite } from "bun:sqlite";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { DatabaseRow, DatabasesRepo } from "../db/repos/databases.ts";
@@ -140,7 +140,9 @@ export class ImportService {
       if ("error" in again) return fail(again.error);
       const raw = path.join(staging, "source");
       copyFileSync(sourcePath, raw);
-      const sha256 = createHash("sha256").update(readFileSync(raw)).digest("hex");
+      const h = createHash("sha256");
+      for await (const chunk of Bun.file(raw).stream()) h.update(chunk);
+      const sha256 = h.digest("hex");
       log(`[import] ${target.slug} ← ${src}: ${lstatSync(raw).size} bytes, sha256 ${sha256}`);
       let db: SQLite | null = null;
       try {
