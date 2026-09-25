@@ -26,6 +26,8 @@ const cfg = (over: Partial<BackupConfig> = {}): BackupConfig => ({
   snapshotInterval: "24h",
   retention: "168h",
   maxLagMs: 60_000,
+  verifyAt: null,
+  verifyMaxAgeMs: 48 * 3_600_000,
   ...over,
 });
 
@@ -244,10 +246,23 @@ describe("healthz", () => {
     expect(healthReport({ databases: dbs, backupState: () => "ok", sqldOk: true }).status).toBe("ok");
     expect(healthReport({ databases: dbs, backupState: () => "starting", sqldOk: true }).status).toBe("ok");
     const bad = healthReport({ databases: dbs, backupState: (id) => (id === "a" ? "error" : "ok"), sqldOk: true });
-    expect(bad).toEqual({ status: "degraded", sqld: { ok: true, running: 2, expected: 2 }, backup: { enabled: true, ok: 1, failing: 1 } });
+    expect(bad).toEqual({
+      status: "degraded",
+      sqld: { ok: true, running: 2, expected: 2 },
+      backup: { enabled: true, ok: 1, failing: 1 },
+      verify: { enabled: false, ok: 0, failing: 0 },
+    });
     expect(healthReport({ databases: dbs, backupState: null, sqldOk: true }).status).toBe("degraded");
     expect(healthReport({ databases: [...dbs, { id: "c", status: "crashed", auto_start: 1 }], backupState: () => "ok", sqldOk: true }).status).toBe("degraded");
     expect(healthReport({ databases: dbs, backupState: () => "ok", sqldOk: false }).status).toBe("degraded");
+  });
+
+  test("restore-verify: failed or stale degrades; pending (new database) does not", () => {
+    const base = { databases: dbs, backupState: () => "ok" as const, sqldOk: true };
+    expect(healthReport({ ...base, verifyState: () => "ok" }).status).toBe("ok");
+    expect(healthReport({ ...base, verifyState: () => "pending" }).status).toBe("ok");
+    expect(healthReport({ ...base, verifyState: (id) => (id === "a" ? "failed" : "ok") }).verify).toEqual({ enabled: true, ok: 1, failing: 1 });
+    expect(healthReport({ ...base, verifyState: () => "stale" }).status).toBe("degraded");
   });
 });
 

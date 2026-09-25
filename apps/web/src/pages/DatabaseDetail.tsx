@@ -65,6 +65,19 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 
 export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenDatabase }: Props) {
   const [showRestore, setShowRestore] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+
+  async function handleVerify() {
+    setVerifying(true);
+    setActionError(null);
+    try {
+      setBackup(await api.verifyBackup(databaseId));
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Verify failed");
+    } finally {
+      setVerifying(false);
+    }
+  }
   const [db, setDb] = useState<Database | null>(null);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -391,6 +404,26 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
               {backup.txidDb ?? "—"}
               {backup.restarts > 0 ? ` · ${backup.restarts} restart(s)` : ""}
             </p>
+            {backup.verify && (
+              <p className={backup.verify.health === "ok" || backup.verify.health === "pending" ? "muted" : "error-detail"}>
+                <span className={`scope-badge verify-${backup.verify.health}`}>
+                  restore-verify {backup.verify.health}
+                </span>{" "}
+                {backup.verify.lastAt
+                  ? `last ${fmtTime(backup.verify.lastAt)} (${backup.verify.lastOutcome}${backup.verify.lastDetail ? `: ${backup.verify.lastDetail}` : ""})`
+                  : "never run — first run tonight"}
+                {backup.verify.lastOkAt && backup.verify.lastOutcome !== "ok" ? ` · last success ${fmtTime(backup.verify.lastOkAt)}` : ""}{" "}
+                <button
+                  type="button"
+                  className="btn ghost small"
+                  onClick={() => void handleVerify()}
+                  disabled={verifying || db.status !== "running"}
+                  title="Restore the latest backup to a scratch copy, check integrity and schema, then delete it"
+                >
+                  {verifying ? "Verifying…" : "Verify now"}
+                </button>
+              </p>
+            )}
             {backup.lastError && backup.state !== "ok" && (
               <p className="error-detail" role="alert">
                 {backup.lastErrorAt ? `${fmtTime(backup.lastErrorAt)}: ` : ""}

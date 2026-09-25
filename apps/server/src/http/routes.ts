@@ -31,6 +31,8 @@ import { assertInside } from "../util/paths.ts";
 import type { DnsManager } from "../dns/manager.ts";
 import type { Replicator } from "../backup/replicator.ts";
 import type { RestoreService } from "../backup/restore.ts";
+import { verifyHealth, type VerifyService } from "../backup/verify.ts";
+import type { VerificationsRepo } from "../db/repos/verifications.ts";
 import { RestoreRequestSchema, type BackupStatus, type RestoreRequest } from "@sqlitend/shared";
 import { installAuth, type AppEnv, type AuthDeps } from "./auth-routes.ts";
 import { maxSlugLength, parseHostTemplate, publicKeyFor, renderHost } from "../gateway/gateway.ts";
@@ -142,6 +144,7 @@ export interface RoutesDeps {
   /** Continuous S3 backup; absent when not configured. */
   backup?: Replicator | null;
   restore?: RestoreService | null;
+  verify?: { service: VerifyService; results: VerificationsRepo; maxAgeMs: number; startedAt?: number } | null;
   /** Control-plane login; absent only with SQLITEND_AUTH=off (loopback dev). */
   auth?: AuthDeps | null;
 }
@@ -336,11 +339,48 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
   const backupStatus = (id: string): BackupStatus => {
     if (!d.backup) {
       return { enabled: false, state: "disabled", replicaUrl: null, txidDb: null, txidReplica: null, lastSyncAt: null,
-        lastSnapshotAt: null, behindSince: null, lastError: null, lastErrorAt: null, restarts: 0 };
+        lastSnapshotAt: null, behindSince: null, lastError: null, lastErrorAt: null, restarts: 0, verify: null };
     }
     const { pid: _pid, ...s } = d.backup.status(id);
-    return { enabled: true, ...s };
+    return { enabled: true, ...s, verify: verifyStatus(id) };
   };
+
+  const verifyStatus = (id: string): BackupStatus["verify"] => {
+    if (!d.verify) return null;
+    const row = d.databases.getById(id);
+    const latest = d.verify.results.latest(id);
+    const ok = d.verify.results.latestOk(id);
+    return {
+      health: verifyHealth(latest, ok, Math.max(row?.created_at ?? 0, d.verify.startedAt ?? 0), Date.now(), d.verify.maxAgeMs),
+      lastAt: latest?.finished_at ?? null,
+      lastOutcome: latest?.outcome ?? null,
+      lastDetail: latest?.detail ?? null,
+      lastOkAt: ok?.finished_at ?? null,
+      restoredBytes: latest?.restored_bytes ?? null,
+    };
+  };
+
+  // Restore-verify one database now (waits for the result).
+  app.post("/api/databases/:id/backup/verify", async (c) => {
+    const row = requireDb(c.req.param("id"));
+    if (!d.verify) throw new ApiError(409, "backup_disabled", "backups are not configured");
+    if (row.status !== "running") throw new ApiError(409, "not_running", "only running databases are verified");
+    await d.verify.service.verifyOneQueued(row);
+    return c.json(backupStatus(row.id));
+  });
+
+  // Restore-verify every running database in the background.
+  app.post("/api/backups/verify", (c) => {
+    if (!d.verify) throw new ApiError(409, "backup_disabled", "backups are not configured");
+    const alreadyRunning = d.verify.service.busy;
+    void d.verify.service.runAll("manual");
+    return c.json({ started: !alreadyRunning, alreadyRunning }, 202);
+  });
+
+  app.get("/api/databases/:id/backup/verifications", (c) => {
+    const row = requireDb(c.req.param("id"));
+    return c.json(d.verify ? d.verify.results.history(row.id) : []);
+  });
 
   // Replicas under this server's prefix, deleted databases included.
   app.get("/api/backups/replicas", async (c) => {

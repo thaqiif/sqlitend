@@ -756,3 +756,7 @@ code, pre {
 .backup-ok { color: var(--ok); }
 .backup-starting, .backup-lagging { color: var(--warn); }
 .backup-error, .backup-stopped, .backup-disabled { color: var(--danger); }
+.verify-ok { color: var(--ok); }
+.verify-pending { color: var(--muted); }
+.verify-stale { color: var(--warn); }
+.verify-failed { color: var(--danger); }

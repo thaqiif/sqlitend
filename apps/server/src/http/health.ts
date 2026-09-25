@@ -9,6 +9,8 @@ import type { ReplicaState } from "../backup/replicator.ts";
 export interface HealthInput {
   databases: { id: string; status: string; auto_start: number }[];
   backupState: ((id: string) => ReplicaState) | null;
+  /** Restore-verify health per database; null when verification is off. */
+  verifyState?: ((id: string) => "ok" | "failed" | "stale" | "pending") | null;
   sqldOk: boolean;
 }
 
@@ -16,6 +18,7 @@ export interface HealthReport {
   status: "ok" | "degraded";
   sqld: { ok: boolean; running: number; expected: number };
   backup: { enabled: boolean; ok: number; failing: number };
+  verify: { enabled: boolean; ok: number; failing: number };
 }
 
 export function healthReport(h: HealthInput): HealthReport {
@@ -31,10 +34,21 @@ export function healthReport(h: HealthInput): HealthReport {
       else if (s !== "starting") failing++;
     }
   }
-  const healthy = h.sqldOk && running.length === expected.length && !!h.backupState && failing === 0;
+  let vOk = 0;
+  let vFailing = 0;
+  if (h.verifyState) {
+    for (const d of running) {
+      const v = h.verifyState(d.id);
+      if (v === "ok") vOk++;
+      // failed = the backup could not be restored; stale = no proof it can be.
+      else if (v !== "pending") vFailing++;
+    }
+  }
+  const healthy = h.sqldOk && running.length === expected.length && !!h.backupState && failing === 0 && vFailing === 0;
   return {
     status: healthy ? "ok" : "degraded",
     sqld: { ok: h.sqldOk, running: running.length, expected: expected.length },
     backup: { enabled: !!h.backupState, ok, failing },
+    verify: { enabled: !!h.verifyState, ok: vOk, failing: vFailing },
   };
 }

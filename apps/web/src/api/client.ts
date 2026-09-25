@@ -155,6 +155,8 @@ export const api = {
   listReplicas: () => request<ReplicaInfo[]>("/backups/replicas"),
   restoreBackup: (sourceId: string, body: RestoreRequest) =>
     request<Database>(`/backups/${encodeURIComponent(sourceId)}/restore`, { method: "POST", body: JSON.stringify(body) }),
+  verifyBackup: (id: string) =>
+    request<BackupStatus>(`/databases/${encodeURIComponent(id)}/backup/verify`, { method: "POST" }),
   getBackup: (id: string) => request<BackupStatus>(`/databases/${encodeURIComponent(id)}/backup`),
   getSession: () => request<SessionInfo>("/auth/session"),
   login: (password: string, totp?: string) =>

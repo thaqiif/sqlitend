@@ -206,6 +206,18 @@ export const BackupStatusSchema = z.object({
   lastError: z.string().nullable(),
   lastErrorAt: z.number().int().nullable(),
   restarts: z.number().int(),
+  /** Latest restore-verify (null = never ran). */
+  verify: z
+    .object({
+      health: z.enum(["ok", "failed", "stale", "pending"]),
+      lastAt: z.number().int().nullable(),
+      lastOutcome: z.enum(["ok", "failed"]).nullable(),
+      lastDetail: z.string().nullable(),
+      lastOkAt: z.number().int().nullable(),
+      restoredBytes: z.number().int().nullable(),
+    })
+    .nullable()
+    .default(null),
 });
 export type BackupStatus = z.infer<typeof BackupStatusSchema>;
 

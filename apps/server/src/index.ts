@@ -37,6 +37,8 @@ import { AuthService } from "./auth/session.ts";
 import { clientIp } from "./http/client-ip.ts";
 import { Replicator } from "./backup/replicator.ts";
 import { RestoreService, realRunLitestream, s3ClientFor } from "./backup/restore.ts";
+import { VerifyService, verifyHealth } from "./backup/verify.ts";
+import { VerificationsRepo } from "./db/repos/verifications.ts";
 import { healthReport } from "./http/health.ts";
 
 export const VERSION = "0.1.0";
@@ -151,6 +153,30 @@ const restore = config.backup
     })
   : null;
 
+const verifications = new VerificationsRepo(metadata.db);
+const verifier = config.backup
+  ? new VerifyService({
+      config: config.backup,
+      dataRoot: config.dataRoot,
+      listDatabases: () => databases.list(),
+      results: verifications,
+      run: realRunLitestream(config.backup),
+      s3: s3ClientFor(config.backup),
+      scheduleAt: config.backup.verifyAt,
+      onResult: (r) =>
+        authRepo.audit({ actor: "system", ip: null, action: "backup.verify", target: r.database_id, outcome: r.outcome === "ok" ? "ok" : "error", detail: r.detail }),
+    })
+  : null;
+if (verifier) {
+  if (config.backup!.verifyAt) verifier.start();
+  else console.warn("[verify] WARNING: scheduled restore-verify is off (SQLITEND_BACKUP_VERIFY_AT=off)");
+}
+const verifyStateOf = (id: string) => {
+  const row = databases.getById(id);
+  const graceFrom = Math.max(row?.created_at ?? 0, verifier!.startedAt);
+  return verifyHealth(verifications.latest(id), verifications.latestOk(id), graceFrom, Date.now(), config.backup!.verifyMaxAgeMs);
+};
+
 const replicator = config.backup
   ? new Replicator({
       config: config.backup,
@@ -176,6 +202,7 @@ else if (!authService!.setupDone) console.warn("[auth] no admin password yet —
 const routes = createRoutes({
   backup: replicator,
   restore,
+  verify: verifier ? { service: verifier, results: verifications, maxAgeMs: config.backup!.verifyMaxAgeMs, startedAt: verifier.startedAt } : null,
   auth: authService ? { service: authService, repo: authRepo, cookieSecure: config.cookieSecure } : null,
   dns,
   config,
@@ -205,6 +232,7 @@ const server = Bun.serve({
       const report = healthReport({
         databases: databases.list(),
         backupState: replicator ? (id) => replicator.status(id).state : null,
+        verifyState: verifier && config.backup!.verifyAt ? verifyStateOf : null,
         sqldOk,
       });
       return Response.json(report, { status: report.status === "ok" ? 200 : 503, headers: { "cache-control": "no-store" } });
@@ -291,6 +319,7 @@ async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log("[shutdown] stopping sqld processes (spawned + adopted)…");
+  verifier?.stop(); // before sqld: no new verify reads a live file that is going away
   await supervisor.shutdown();
   await replicator?.shutdown(); // after sqld: final WAL flush to the replica
   sampler.stop();

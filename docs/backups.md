@@ -112,6 +112,40 @@ with the earliest restorable time. How far back you can go is `SQLITEND_BACKUP_R
 A deleted database is restored by its old id. The manifest (`<prefix>/db/<id>/sqlitend.json`)
 supplies its name.
 
+## Nightly restore-verify
+
+"Uploading" doesn't prove "restorable". Every night at `SQLITEND_BACKUP_VERIFY_AT` (default `03:30`,
+server local time; `off` disables it), and on demand, sqlitend works through each running database,
+one at a time:
+
+1. **Free space:** it needs about 1.2× the database size plus a 256 MB reserve. A verify never
+   fills the disk the live databases need.
+2. **Preflight:** it lists the replica through the S3 API with a 20 s limit.
+   `litestream restore` retries an unreachable store forever (verified), so without this an outage
+   would hang the run.
+3. **Restore** the latest state to `<dataRoot>/verify/<id>/data`.
+4. **`PRAGMA integrity_check`** must be `ok`.
+5. **Schema check:** the tables, views, indexes and triggers of the restored copy must equal the
+   live database's. This catches a backup that is valid SQLite but the wrong or empty data.
+6. Delete the scratch copy and record the result (the last 60 per database are kept, and each run
+   is also in the audit log as `backup.verify`).
+
+Results show on the database page under *Backup*, with a **Verify now** button. Also:
+
+```
+POST /api/databases/:id/backup/verify      # verify one now; returns the backup status
+POST /api/backups/verify                   # verify all, in the background
+GET  /api/databases/:id/backup/verifications
+```
+
+**`/healthz` turns 503** when a database's latest verify **failed**, or its last successful verify
+is older than `SQLITEND_BACKUP_VERIFY_MAX_AGE_HOURS` (default 48), i.e. **stale**. Stale means the
+verifier itself silently stopped. A database younger than that window is `pending` until its first
+nightly run, and doesn't alarm.
+
+A migration applied seconds before a verify can show up as a schema mismatch while the replica
+catches up; the next run clears it. Use **Verify now** to confirm.
+
 ### Manual restore without sqlitend (disaster recovery)
 
 ```sh
@@ -120,5 +154,5 @@ LITESTREAM_ACCESS_KEY_ID=… LITESTREAM_SECRET_ACCESS_KEY=… \
   "s3://<bucket>/<prefix>/db/<database-id>?endpoint=<endpoint>&region=<region>&force-path-style=true"
 ```
 
-Next: a scheduled restore-verify drill, and an encrypted backup of the control plane (metadata +
-per-database signing keys) for rebuilding a whole server.
+Next: an encrypted backup of the control plane (metadata + per-database signing keys) for rebuilding
+a whole server.

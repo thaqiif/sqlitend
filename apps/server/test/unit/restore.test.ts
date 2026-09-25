@@ -19,12 +19,12 @@ import type { Sampler } from "../../src/metrics/sampler.ts";
 const cfg: BackupConfig = {
   endpoint: "https://s3.example.com", bucket: "sqlitend-backups", region: "auto", forcePathStyle: true,
   accessKeyId: "k", secretAccessKey: "s", prefix: "server-a", litestreamPath: "/x", snapshotInterval: "24h",
-  retention: "168h", maxLagMs: 60_000,
+  retention: "168h", maxLagMs: 60_000, verifyAt: null, verifyMaxAgeMs: 48 * 3_600_000,
 };
 
-/** In-memory S3 with prefix/delimiter listing. */
+/** In-memory S3 with prefix/delimiter listing (preloaded with replica data for the test source). */
 function fakeS3(): S3Like & { objects: Map<string, string> } {
-  const objects = new Map<string, string>();
+  const objects = new Map<string, string>([["server-a/db/11111111-2222-3333-4444-555555555555/ltx/0/0000000000000001.ltx", "x"]]);
   return {
     objects,
     write: async (k, v) => void objects.set(k, v),
@@ -224,9 +224,30 @@ describe("resolveTxid", () => {
   });
 });
 
+describe("restore preflight", () => {
+  test("unreachable store or missing replica fails fast, before litestream runs", async () => {
+    const calls: string[][] = [];
+    const s3: S3Like = { write: async () => {}, file: () => ({ text: async () => "", exists: async () => false }), list: () => new Promise(() => {}) };
+    const { svc, started } = service(writes(1, calls), { s3, preflightTimeoutMs: 100 });
+    const t = target();
+    svc.start("11111111-2222-3333-4444-555555555555", t);
+    await svc.settled(t.id);
+    expect(databases.getById(t.id)!.failed_reason).toContain("backup store unreachable");
+    expect(calls).toHaveLength(0);
+    expect(started).toEqual([]);
+
+    const t2 = target("second");
+    const { svc: svc2 } = service(writes(1));
+    svc2.start("99999999-2222-3333-4444-555555555555", t2); // no objects under this id
+    await svc2.settled(t2.id);
+    expect(databases.getById(t2.id)!.failed_reason).toContain("no replica found");
+  });
+});
+
 describe("manifests + replica listing", () => {
   test("lists replicas under the prefix with manifests; flags deleted ones", async () => {
     const s3 = fakeS3();
+    s3.objects.clear();
     const { svc } = service(writes(1), { s3 });
     const live = target("live");
     await svc.ensureManifest(live);

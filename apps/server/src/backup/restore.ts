@@ -142,6 +142,28 @@ export function resolveTxid(files: LtxFile[], at: Date): { txid: string } | { ea
   return { earliest: earliest === null ? null : new Date(earliest + 1000).toISOString() };
 }
 
+/**
+ * Fast preflight before any `litestream restore`: litestream retries an
+ * unreachable store FOREVER (verified: still retrying after 90 s), so a store
+ * outage would otherwise hang a restore/verify until its hour-long timeout.
+ * Lists the replica prefix with a hard time limit; null = OK, else the reason.
+ */
+export async function preflightReplica(s3: S3Like, cfg: BackupConfig, dbId: string, timeoutMs = 20_000): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const listing = await Promise.race([
+      s3.list({ prefix: `${replicaPath(cfg, dbId)}/`, maxKeys: 2 }),
+      new Promise<never>((_, rej) => (timer = setTimeout(() => rej(new Error(`no answer within ${timeoutMs / 1000}s`)), timeoutMs))),
+    ]);
+    const keys = (listing.contents ?? []).map((c) => c.key).filter((k) => !k.endsWith(`/${MANIFEST}`));
+    return keys.length === 0 && !listing.isTruncated ? "no replica found for this database in the backup store" : null;
+  } catch (err) {
+    return `backup store unreachable: ${(err as Error).message.slice(0, 200)}`;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Open read-only and run integrity_check; returns null when OK, else the problem. */
 export function verifySqliteFile(file: string): string | null {
   let db: SQLite | null = null;
@@ -167,6 +189,7 @@ export interface RestoreDeps {
   startDatabase: (row: DatabaseRow) => Promise<{ ok: boolean; error?: string }>;
   afterStart?: (row: DatabaseRow) => Promise<void>;
   timeoutMs?: number;
+  preflightTimeoutMs?: number;
   log?: (m: string) => void;
 }
 
@@ -247,6 +270,8 @@ export class RestoreService {
       rmSync(staging, { recursive: true, force: true });
       mkdirSync(staging, { recursive: true, mode: 0o700 });
       const url = litestreamReplicaUrl(this.d.config, sourceId);
+      const pre = await preflightReplica(this.d.s3, this.d.config, sourceId, this.d.preflightTimeoutMs);
+      if (pre) return fail(pre);
       let pin: string[] = [];
       if (at) {
         const ls = await this.d.run(["ltx", "-level", "all", "-json", url], 5 * 60_000);

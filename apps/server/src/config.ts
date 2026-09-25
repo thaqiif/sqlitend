@@ -25,6 +25,10 @@ export interface BackupConfig {
   retention: string;
   /** Replica may trail the database this long before status turns "lagging", ms. */
   maxLagMs: number;
+  /** Daily restore-verify time "HH:MM" (server local), or null when disabled. */
+  verifyAt: string | null;
+  /** A database whose last successful verify is older than this is unhealthy, ms. */
+  verifyMaxAgeMs: number;
 }
 
 export interface PortRange {
@@ -252,5 +256,15 @@ function loadBackupConfig(env: NodeJS.ProcessEnv): BackupConfig | null {
     snapshotInterval,
     retention,
     maxLagMs: parsePositiveInt("SQLITEND_BACKUP_MAX_LAG_SECONDS", env.SQLITEND_BACKUP_MAX_LAG_SECONDS, 300, 10, 86_400) * 1000,
+    verifyAt: parseVerifyAt(get("SQLITEND_BACKUP_VERIFY_AT")),
+    verifyMaxAgeMs: parsePositiveInt("SQLITEND_BACKUP_VERIFY_MAX_AGE_HOURS", env.SQLITEND_BACKUP_VERIFY_MAX_AGE_HOURS, 48, 1, 24 * 60) * 3_600_000,
   };
+}
+
+function parseVerifyAt(raw: string): string | null {
+  if (raw.toLowerCase() === "off") return null;
+  const v = raw || "03:30";
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(v);
+  if (!m) throw new Error(`invalid SQLITEND_BACKUP_VERIFY_AT: "${raw}" (HH:MM, server local time, or off)`);
+  return v;
 }
