@@ -47,6 +47,14 @@ export const DatabaseSchema = z.object({
   sqldVersion: z.string().nullable(),
   /** Last launch failure (sqld stderr tail) — null after a successful start. */
   failedReason: z.string().nullable(),
+  /** Managed public DNS record; status null when DNS automation is off. */
+  dns: z
+    .object({
+      hostname: z.string().nullable(),
+      status: z.enum(["active", "error", "conflict"]).nullable(),
+      error: z.string().nullable(),
+    })
+    .default({ hostname: null, status: null, error: null }),
   createdAt: z.number().int(),
 });
 export type Database = z.infer<typeof DatabaseSchema>;
@@ -63,6 +71,8 @@ export const ConnectionSchema = z.object({
   httpUrl: z.string().url(),
   hranaUrl: z.string(),
   grpcUrl: z.string(),
+  /** Public HTTPS URL via the gateway (e.g. https://<db>-libsql.example.com); null when the gateway is disabled. */
+  publicUrl: z.string().url().nullable().default(null),
   dbName: z.string(),
 });
 export type Connection = z.infer<typeof ConnectionSchema>;

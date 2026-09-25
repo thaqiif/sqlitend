@@ -28,6 +28,8 @@ import type { Sampler } from "../metrics/sampler.ts";
 import { PortExhaustedError } from "../supervisor/ports.ts";
 import { mintToken, dbKeyRelPath } from "../auth/tokens.ts";
 import { assertInside } from "../util/paths.ts";
+import type { DnsManager } from "../dns/manager.ts";
+import { maxSlugLength, parseHostTemplate, publicKeyFor, renderHost } from "../gateway/gateway.ts";
 
 // ---------------------------------------------------------------------------
 // DTO mappers (snake_case rows -> camelCase shared DTOs)
@@ -59,6 +61,11 @@ function rowToDatabase(r: DbRow): DatabaseDto {
     autoStart: r.auto_start === 1,
     sqldVersion: r.sqld_version,
     failedReason: r.failed_reason ?? null,
+    dns: {
+      hostname: r.dns_hostname ?? null,
+      status: r.dns_status === "active" || r.dns_status === "error" || r.dns_status === "conflict" ? r.dns_status : null,
+      error: r.dns_error ?? null,
+    },
     createdAt: r.created_at,
   };
 }
@@ -124,10 +131,13 @@ export interface RoutesDeps {
   /** Version string of the target sqld binary, or null if unavailable. */
   sqldVersion: string | null;
   version: string;
+  /** Cloudflare DNS automation; absent when disabled. */
+  dns?: DnsManager | null;
 }
 
 export function createRoutes(d: RoutesDeps): Hono {
   const app = new Hono();
+  const hostTemplate = d.config.gatewayHostTemplate ? parseHostTemplate(d.config.gatewayHostTemplate) : null;
 
   // Request log — every API call leaves one line (method, path, status, ms).
   app.use("*", async (c, next) => {
@@ -200,6 +210,13 @@ export function createRoutes(d: RoutesDeps): Hono {
     }
 
     const slug = slugify(body.name);
+    if (hostTemplate && slug.length > maxSlugLength(hostTemplate)) {
+      throw new ApiError(
+        400,
+        "name_too_long",
+        `name is too long for a public hostname: slug "${slug}" exceeds ${maxSlugLength(hostTemplate)} characters`,
+      );
+    }
     const id = randomUUID();
     const dataDir = path.join(d.config.dataRoot, "workspaces", ws.slug, "dbs", slug);
 
@@ -252,6 +269,7 @@ export function createRoutes(d: RoutesDeps): Hono {
         fresh?.failed_reason ?? started.stderrTail,
       );
     }
+    if (d.dns) await d.dns.sync(d.databases.getById(id)!);
     const fresh = d.databases.getById(id);
     return c.json(rowToDatabase(fresh!), 201);
   });
@@ -315,6 +333,7 @@ export function createRoutes(d: RoutesDeps): Hono {
       await rm(path.join(d.config.dataRoot, keyRel), { force: true });
       await rm(path.join(d.config.dataRoot, pubRel), { force: true });
     }
+    if (d.dns) await d.dns.remove(row);
     if (row.port && row.grpc_port) d.supervisor.portAllocator.release({ http: row.port, grpc: row.grpc_port });
     d.databases.delete(row.id);
     return c.body(null, 204);
@@ -327,9 +346,18 @@ export function createRoutes(d: RoutesDeps): Hono {
       httpUrl: `http://${d.config.publicHost}:${row.port}`,
       hranaUrl: `ws://${d.config.publicHost}:${row.port}`,
       grpcUrl: `http://${d.config.publicHost}:${row.grpc_port}`,
+      publicUrl: hostTemplate ? `https://${renderHost(hostTemplate, publicKeyFor(hostTemplate, row))}` : null,
       dbName: row.slug,
     };
     return c.json(conn);
+  });
+
+  // ---- dns ----------------------------------------------------------------
+  app.post("/api/databases/:id/dns/sync", async (c) => {
+    const row = requireDb(c.req.param("id"));
+    if (!d.dns) throw new ApiError(409, "dns_disabled", "Cloudflare DNS automation is not configured");
+    await d.dns.sync(row);
+    return c.json(rowToDatabase(d.databases.getById(row.id)!));
   });
 
   // ---- tokens -------------------------------------------------------------

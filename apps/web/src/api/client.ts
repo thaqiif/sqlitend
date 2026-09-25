@@ -101,6 +101,9 @@ export const api = {
   stopDatabase: (id: string) =>
     request<Database>(`/databases/${encodeURIComponent(id)}/stop`, { method: "POST" }),
 
+  syncDns: (id: string) =>
+    request<Database>(`/databases/${encodeURIComponent(id)}/dns/sync`, { method: "POST" }),
+
   deleteDatabase: (id: string) =>
     request<void>(`/databases/${encodeURIComponent(id)}`, { method: "DELETE" }),
 

@@ -7,7 +7,8 @@ import { migrate, openDb } from "../../src/db/metadata.ts";
 import { DatabasesRepo, type DatabaseRow } from "../../src/db/repos/databases.ts";
 import { TokensRepo } from "../../src/db/repos/tokens.ts";
 import { WorkspacesRepo } from "../../src/db/repos/workspaces.ts";
-import { createRoutes } from "../../src/http/routes.ts";
+import { createRoutes, type RoutesDeps } from "../../src/http/routes.ts";
+import type { DnsManager } from "../../src/dns/manager.ts";
 import { loadConfig } from "../../src/config.ts";
 import { createPortAllocator } from "../../src/supervisor/ports.ts";
 import type { Supervisor } from "../../src/supervisor/supervisor.ts";
@@ -70,9 +71,15 @@ function makeApp(over: {
   sampler?: Sampler;
   sqldOk?: boolean;
   publicHost?: string;
+  gatewayHostTemplate?: string;
+  dns?: RoutesDeps["dns"];
 } = {}) {
   return createRoutes({
-    config: loadConfig({}, { dataRoot: dir, ...(over.publicHost ? { publicHost: over.publicHost } : {}) }),
+    config: loadConfig({}, {
+      dataRoot: dir,
+      ...(over.publicHost ? { publicHost: over.publicHost } : {}),
+      ...(over.gatewayHostTemplate ? { gatewayPort: 6080, gatewayHostTemplate: over.gatewayHostTemplate } : {}),
+    }),
     workspaces,
     databases,
     tokens,
@@ -81,6 +88,7 @@ function makeApp(over: {
     sqldOk: over.sqldOk ?? true,
     sqldVersion: "fake",
     version: "test",
+    dns: over.dns ?? null,
   });
 }
 
@@ -239,6 +247,24 @@ describe("start / stop routes", () => {
     expect(conn.grpcUrl).toBe("http://127.0.0.1:5002");
   });
 
+  test("publicUrl is null without a gateway and https://<slug><suffix> with one", async () => {
+    const d = databases.create(dbRow(ws().id, { slug: "bots-prod", port: 5001, grpc_port: 5002, status: "running" }));
+    const off = (await (await send(makeApp(), "GET", `/api/databases/${d.id}/connection`)).json()) as { publicUrl: string | null };
+    expect(off.publicUrl).toBeNull();
+    const app = makeApp({ gatewayHostTemplate: "{db}-libsql.cloudsby.me" });
+    const on = (await (await send(app, "GET", `/api/databases/${d.id}/connection`)).json()) as { publicUrl: string | null };
+    expect(on.publicUrl).toBe("https://bots-prod-libsql.cloudsby.me");
+  });
+
+  test("create rejects names whose slug cannot fit a DNS label under the gateway template", async () => {
+    const app = makeApp({ gatewayHostTemplate: "{db}-libsql.cloudsby.me" });
+    const res = await send(app, "POST", `/api/workspaces/${ws().id}/databases`, { name: "x".repeat(57) });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("name_too_long");
+    const fits = await send(app, "POST", `/api/workspaces/${ws().id}/databases`, { name: "y".repeat(56) });
+    expect(fits.status).toBe(201);
+  });
+
   test("connection URLs advertise SQLITEND_PUBLIC_HOST when configured", async () => {
     const app = makeApp({ publicHost: "100.97.250.76" });
     const d = databases.create(dbRow(ws().id, { port: 7001, grpc_port: 7002, status: "running" }));
@@ -380,5 +406,43 @@ describe("delete / tokens / metrics routes", () => {
     expect(body.error.message).toBe("internal error");
     // The internals (stack / message) are NOT leaked to the client.
     expect(JSON.stringify(body)).not.toContain("booooom");
+  });
+});
+
+describe("dns routes", () => {
+  function fakeDns() {
+    const log: string[] = [];
+    const mgr = {
+      sync: async (row: DatabaseRow) => {
+        log.push(`sync ${row.slug}`);
+        databases.setDns(row.id, { hostname: `${row.slug}-libsql.cloudsby.me`, recordId: "rec1", status: "active", error: null });
+      },
+      remove: async (row: DatabaseRow) => { log.push(`remove ${row.dns_record_id}`); },
+    } as unknown as DnsManager;
+    return { mgr, log };
+  }
+
+  test("create syncs DNS and returns the dns state; delete removes it", async () => {
+    const { mgr, log } = fakeDns();
+    const app = makeApp({ gatewayHostTemplate: "{db}-libsql.cloudsby.me", dns: mgr });
+    const w = workspaces.create(wsRow(`ws-${uid().slice(0, 8)}`));
+    const res = await send(app, "POST", `/api/workspaces/${w.id}/databases`, { name: "Bots Prod" });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string; dns: { hostname: string; status: string; error: string | null } };
+    expect(body.dns).toEqual({ hostname: "bots-prod-libsql.cloudsby.me", status: "active", error: null });
+    expect((await send(app, "DELETE", `/api/databases/${body.id}`)).status).toBe(204);
+    expect(log).toEqual(["sync bots-prod", "remove rec1"]);
+  });
+
+  test("POST /dns/sync: 409 when disabled, re-syncs when enabled", async () => {
+    const w = workspaces.create(wsRow(`ws-${uid().slice(0, 8)}`));
+    const row = databases.create(dbRow(w.id, { slug: "x" }));
+    const off = await send(makeApp(), "POST", `/api/databases/${row.id}/dns/sync`);
+    expect(off.status).toBe(409);
+    const { mgr, log } = fakeDns();
+    const on = await send(makeApp({ dns: mgr }), "POST", `/api/databases/${row.id}/dns/sync`);
+    expect(on.status).toBe(200);
+    expect(((await on.json()) as { dns: { status: string } }).dns.status).toBe("active");
+    expect(log).toEqual(["sync x"]);
   });
 });

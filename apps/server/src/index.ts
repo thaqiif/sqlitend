@@ -28,6 +28,9 @@ import { sqldVersion } from "./supervisor/launcher.ts";
 import { Sampler, type SamplerRow } from "./metrics/sampler.ts";
 import { createRoutes } from "./http/routes.ts";
 import { createStaticHandler, isAllowedHost } from "./http/static.ts";
+import { createGatewayHandler, lookupByKey, parseHostTemplate } from "./gateway/gateway.ts";
+import { CloudflareDns } from "./dns/cloudflare.ts";
+import { DnsManager } from "./dns/manager.ts";
 
 export const VERSION = "0.1.0";
 
@@ -101,7 +104,24 @@ sampler.start(samplerProvider);
 // ---------------------------------------------------------------------------
 // API + static
 // ---------------------------------------------------------------------------
+const dns = config.cloudflareDns && config.gatewayHostTemplate
+  ? new DnsManager({
+      cf: new CloudflareDns({ apiToken: config.cloudflareDns.apiToken, zoneId: config.cloudflareDns.zoneId, apiBase: config.cloudflareDns.apiBase }),
+      template: parseHostTemplate(config.gatewayHostTemplate),
+      target: `${config.cloudflareDns.tunnelId}.cfargotunnel.com`,
+      databases,
+    })
+  : null;
+if (dns) {
+  // Background: boot must not wait on the Cloudflare API.
+  void dns.reconcileAll().then(
+    (r) => console.log(`[dns] boot reconcile: ${r.synced} synced, ${r.failed} failed`),
+    (err) => console.warn(`[dns] boot reconcile failed: ${(err as Error).message}`),
+  );
+}
+
 const routes = createRoutes({
+  dns,
   config,
   workspaces,
   databases,
@@ -169,6 +189,30 @@ function rateLimited(): boolean {
 console.log(`sqlitend ${VERSION} listening on http://${config.host}:${server.port}`);
 
 // ---------------------------------------------------------------------------
+// Gateway (optional): host-routed public front for all databases
+// ---------------------------------------------------------------------------
+const gatewayServer = config.gatewayPort > 0 && config.gatewayHostTemplate
+  ? Bun.serve({
+      port: config.gatewayPort,
+      hostname: config.gatewayHost,
+      maxRequestBodySize: config.gatewayMaxBodyBytes,
+      // Bun's 10 s default would drop long Hrana pipelines (migrations, VACUUM).
+      idleTimeout: 255,
+      fetch: createGatewayHandler({
+        template: parseHostTemplate(config.gatewayHostTemplate),
+        findDatabase: (key) => lookupByKey(key, databases),
+        // sqld binds config.host; a wildcard bind answers on loopback.
+        upstreamHost: ["0.0.0.0", "::", "*"].includes(config.host) ? "127.0.0.1" : config.host,
+        maxBodyBytes: config.gatewayMaxBodyBytes,
+        upstreamTimeoutMs: 240_000,
+      }),
+    })
+  : null;
+if (gatewayServer) {
+  console.log(`[gateway] listening on http://${config.gatewayHost}:${gatewayServer.port} for ${config.gatewayHostTemplate}`);
+}
+
+// ---------------------------------------------------------------------------
 // Graceful shutdown
 // ---------------------------------------------------------------------------
 let shuttingDown = false;
@@ -179,6 +223,7 @@ async function shutdown() {
   await supervisor.shutdown();
   sampler.stop();
   server.stop(true);
+  gatewayServer?.stop(true);
   metadata.db.close();
   console.log("[shutdown] complete");
   process.exit(0);

@@ -236,6 +236,21 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
         <h3 className="panel-title">Connection</h3>
         {connection ? (
           <div className="conn-list">
+            {connection.publicUrl && <CopyRow label="PUBLIC" value={connection.publicUrl} />}
+            {db.dns.status && (
+              <p className={db.dns.status === "active" ? "muted" : "error-detail"} role={db.dns.status === "active" ? undefined : "alert"}>
+                DNS {db.dns.hostname}: {db.dns.status}
+                {db.dns.error ? ` — ${db.dns.error}` : ""}
+                {db.dns.status !== "active" && (
+                  <>
+                    {" "}
+                    <button type="button" className="btn ghost small" onClick={() => void runAction(() => api.syncDns(databaseId))}>
+                      Retry DNS
+                    </button>
+                  </>
+                )}
+              </p>
+            )}
             <CopyRow label="HTTP" value={connection.httpUrl} />
             <CopyRow label="HRANA" value={connection.hranaUrl} />
             <CopyRow label="gRPC" value={connection.grpcUrl} />
