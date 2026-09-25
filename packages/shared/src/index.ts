@@ -233,6 +233,16 @@ export const RestoreRequestSchema = z
   .strict();
 export type RestoreRequest = z.infer<typeof RestoreRequestSchema>;
 
+/** Import a SQLite file from <dataRoot>/imports/ as a new database. */
+export const ImportRequestSchema = z
+  .object({
+    name: z.string().min(1).max(128),
+    /** Plain file name inside the import directory (no path). */
+    file: z.string().min(1).max(200),
+  })
+  .strict();
+export type ImportRequest = z.infer<typeof ImportRequestSchema>;
+
 export const ReplicaInfoSchema = z.object({
   id: z.string(),
   slug: z.string().optional(),
