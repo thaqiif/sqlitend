@@ -6,7 +6,22 @@ import { Modal } from "../components/Modal";
 import { TokenReveal } from "../components/TokenReveal";
 
 const POLL_MS = 5000;
-const DEFAULT_EXPIRY_HOURS = 24;
+const MAX_EXPIRY_HOURS = 24 * 365;
+const EXPIRING_SOON_MS = 14 * 86_400_000;
+
+type TokenState = "active" | "expiring" | "expired" | "revoked";
+function tokenState(t: Token, now = Date.now()): TokenState {
+  if (t.revokedAt) return "revoked";
+  if (t.expiresAt <= now) return "expired";
+  if (t.expiresAt - now < EXPIRING_SOON_MS) return "expiring";
+  return "active";
+}
+const TOKEN_STATE_LABEL: Record<TokenState, string> = {
+  active: "active",
+  expiring: "expires soon",
+  expired: "expired",
+  revoked: "revoked",
+};
 /** Consecutive metrics-poll failures before we surface "metrics unavailable". */
 const METRIC_ERROR_THRESHOLD = 2;
 
@@ -61,7 +76,8 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
   /** Overlap guard: a slow poll never overlaps the next 5s tick. */
   const metricsBusy = useRef(false);
 
-  const [showTokenForm, setShowTokenForm] = useState(false);
+  // null = closed; otherwise the form opens prefilled (Rotate reuses the name).
+  const [tokenForm, setTokenForm] = useState<{ name: string; hours: number } | null>(null);
   const [revealed, setRevealed] = useState<TokenIssued | null>(null);
 
   // Initial load. The database row is required; connection + token metadata are
@@ -152,18 +168,15 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
     setTokens(await api.listTokens(databaseId).catch(() => tokens));
   }
 
-  async function handleRevoke(jti: string) {
+  async function handleRevoke(t: Token) {
+    const label = t.name ? `"${t.name}"` : "this token";
+    if (!window.confirm(`Revoke ${label}? Clients using it are refused by the gateway immediately.`)) return;
     setActionError(null);
     try {
-      // The backend always answers 501 with `revocation_unsupported` — surface that.
-      await api.revokeToken(databaseId, jti);
+      await api.revokeToken(databaseId, t.jti);
       setTokens(await api.listTokens(databaseId));
     } catch (err) {
-      setActionError(
-        err instanceof Error
-          ? `Token revocation isn't supported by this server yet (HTTP 501): ${err.message}`
-          : "Token revocation failed",
-      );
+      setActionError(err instanceof Error ? err.message : "Token revocation failed");
     }
   }
 
@@ -263,7 +276,11 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
       <section className="panel">
         <div className="panel-header">
           <h3 className="panel-title">Tokens</h3>
-          <button type="button" className="btn primary small" onClick={() => setShowTokenForm(true)}>
+          <button
+            type="button"
+            className="btn primary small"
+            onClick={() => setTokenForm({ name: "", hours: NaN })}
+          >
             + Generate token
           </button>
         </div>
@@ -273,28 +290,45 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
           <table className="token-table">
             <thead>
               <tr>
-                <th>Scope</th>
+                <th>Name</th>
+                <th>Status</th>
                 <th>Created</th>
                 <th>Expires</th>
+                <th>Last used</th>
                 <th />
               </tr>
             </thead>
             <tbody>
               {tokens.map((t) => (
-                <tr key={t.jti}>
+                <tr key={t.jti} className={tokenState(t) === "revoked" ? "row-dim" : undefined}>
+                  <td>{t.name ?? <span className="muted">unnamed</span>}</td>
                   <td>
-                    <span className={`scope-badge scope-${t.scope}`}>{t.scope}</span>
+                    <span className={`scope-badge token-${tokenState(t)}`}>{TOKEN_STATE_LABEL[tokenState(t)]}</span>
                   </td>
                   <td>{fmtTime(t.createdAt)}</td>
                   <td>{fmtTime(t.expiresAt)}</td>
+                  <td>{t.lastUsedAt ? fmtTime(t.lastUsedAt) : <span className="muted">never</span>}</td>
                   <td className="cell-end">
-                    <button
-                      type="button"
-                      className="btn ghost small danger-text"
-                      onClick={() => handleRevoke(t.jti)}
-                    >
-                      Revoke
-                    </button>
+                    {tokenState(t) !== "revoked" && (
+                      <>
+                        <button
+                          type="button"
+                          className="btn ghost small"
+                          title="Issue a replacement with the same name; revoke this one once clients use the new token"
+                          onClick={() =>
+                            setTokenForm({
+                              name: t.name ?? "",
+                              hours: Math.max(1, Math.round((t.expiresAt - t.createdAt) / 3_600_000)),
+                            })
+                          }
+                        >
+                          Rotate
+                        </button>
+                        <button type="button" className="btn ghost small danger-text" onClick={() => handleRevoke(t)}>
+                          Revoke
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -315,10 +349,12 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
         </p>
       </section>
 
-      {showTokenForm && (
+      {tokenForm && (
         <TokenForm
+          initialName={tokenForm.name}
+          initialHours={tokenForm.hours}
           databaseId={databaseId}
-          onClose={() => setShowTokenForm(false)}
+          onClose={() => setTokenForm(null)}
           onIssued={handleTokenIssued}
         />
       )}
@@ -329,14 +365,19 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
 
 function TokenForm({
   databaseId,
+  initialName,
+  initialHours,
   onClose,
   onIssued,
 }: {
   databaseId: string;
+  initialName: string;
+  initialHours: number;
   onClose: () => void;
   onIssued: (t: TokenIssued) => Promise<void>;
 }) {
-  const [expiresInHours, setExpiresInHours] = useState<number>(DEFAULT_EXPIRY_HOURS);
+  const [name, setName] = useState(initialName);
+  const [expiresInHours, setExpiresInHours] = useState<number>(initialHours);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -349,7 +390,9 @@ function TokenForm({
         Number.isFinite(expiresInHours) && expiresInHours > 0 ? expiresInHours : undefined;
       // v1 mints full-access tokens only (sqld cannot enforce per-request scopes),
       // so the scope is fixed and omitted from the request body.
+      const trimmed = name.trim();
       const issued = await api.generateToken(databaseId, {
+        ...(trimmed ? { name: trimmed } : {}),
         ...(hours ? { expiresInHours: hours } : {}),
       });
       onClose();
@@ -373,17 +416,33 @@ function TokenForm({
         }}
       >
         <label className="field">
+          <span className="field-label">Name</span>
+          <input
+            type="text"
+            maxLength={64}
+            placeholder="e.g. worker-prod"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={busy}
+            autoFocus
+          />
+        </label>
+        <label className="field">
           <span className="field-label">Lifetime (hours)</span>
           <input
             type="number"
             min={1}
-            max={24 * 365}
+            max={MAX_EXPIRY_HOURS}
+            placeholder="server default"
             value={Number.isFinite(expiresInHours) ? expiresInHours : ""}
             onChange={(e) => setExpiresInHours(Number(e.target.value))}
             disabled={busy}
           />
         </label>
-        <p className="hint">Blank defaults to {DEFAULT_EXPIRY_HOURS} hours.</p>
+        <p className="hint">
+          Blank uses the server default (SQLITEND_TOKEN_TTL_HOURS); maximum {MAX_EXPIRY_HOURS} (1 year). To rotate: issue the
+          replacement, deploy it, then revoke the old token. Both work in between.
+        </p>
         {error && <p className="error" role="alert">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>

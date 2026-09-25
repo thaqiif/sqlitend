@@ -1,4 +1,6 @@
 import type {
+  AuditEntry,
+  SessionInfo,
   Connection,
   CreateDatabase,
   CreateToken,
@@ -14,10 +16,12 @@ import type {
 
 const BASE = "/api";
 
+/** Fired when the server says the session is gone; the AuthGate shows login. */
+export const UNAUTHENTICATED_EVENT = "sqlitend:unauthenticated";
+
 /**
  * Raised for any non-2xx API response (and carries the shared ErrorBody shape)
- * so the UI can surface `{error:{code,message}}` consistently, including the
- * documented 501 `revocation_unsupported` case.
+ * so the UI can surface `{error:{code,message}}` consistently.
  */
 export class ApiError extends Error {
   readonly status: number;
@@ -36,8 +40,11 @@ export class ApiError extends Error {
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
+    credentials: "same-origin",
     headers: {
       ...(init.body ? { "Content-Type": "application/json" } : {}),
+      // Required by the server on state-changing calls (CSRF defence).
+      "X-Sqlitend-Csrf": "1",
       ...init.headers,
     },
   });
@@ -56,6 +63,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const err = (body as ErrorBody | null)?.error;
+    if (res.status === 401 && err?.code === "unauthenticated") window.dispatchEvent(new Event(UNAUTHENTICATED_EVENT));
     throw new ApiError(
       res.status,
       err?.code ?? "request_failed",
@@ -126,7 +134,7 @@ export const api = {
     request<Token[]>(`/databases/${encodeURIComponent(id)}/tokens`),
 
   revokeToken: (id: string, jti: string) =>
-    request<void>(`/databases/${encodeURIComponent(id)}/tokens/${encodeURIComponent(jti)}`, {
+    request<Token>(`/databases/${encodeURIComponent(id)}/tokens/${encodeURIComponent(jti)}`, {
       method: "DELETE",
     }),
 
@@ -137,5 +145,18 @@ export const api = {
     request<Metrics>(`/databases/${encodeURIComponent(id)}/metrics`),
 
   getSystemInfo: () => request<SystemInfo>("/system"),
+
+  // -------------------------------------------------------------------------
+  // Auth + audit
+  // -------------------------------------------------------------------------
+  getSession: () => request<SessionInfo>("/auth/session"),
+  login: (password: string, totp?: string) =>
+    request<{ authenticated: true }>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify(totp ? { password, totp } : { password }),
+    }),
+  logout: () => request<void>("/auth/logout", { method: "POST" }),
+  listAudit: (limit = 100, before?: number) =>
+    request<AuditEntry[]>(`/audit?limit=${limit}${before ? `&before=${before}` : ""}`),
 };
 

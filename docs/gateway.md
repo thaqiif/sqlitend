@@ -105,10 +105,31 @@ const db = createClient({ url: "https://bots-prod-libsql.cloudsby.me", authToken
 Use `https://`, not `libsql://` or `wss://`. The gateway speaks Hrana over HTTP only and answers
 WebSocket upgrades with 501.
 
+## Tokens: naming, rotation, expiry
+
+- Give every token a name when you issue it, e.g. `worker-prod` (UI, or
+  `POST /api/databases/:id/tokens {"name":"worker-prod","expiresInHours":8760}`).
+- **Rotate:** issue a replacement with the same name (the **Rotate** button prefills it), deploy it
+  (`wrangler secret put LIBSQL_AUTH_TOKEN`), check that **Last used** moves to the new token, then
+  **Revoke** the old one. Both tokens work in between.
+- **Revoke** takes effect on the next request through the gateway.
+- **Expiry alerts:** `GET /api/tokens/expiring?withinDays=14&expiredWithinDays=7` lists tokens
+  across all databases that aren't revoked and either expire within the window or expired recently.
+  Old expiries drop off the list, so the alert doesn't fire forever. Poll it from cron
+  and alert when it returns anything. The UI marks these tokens *expires soon*.
+
 ## Behaviour and security notes
 
-- **Auth is unchanged.** Every request still needs that database's JWT, which sqld verifies. The
-  gateway only routes, and a token for database A is rejected by database B.
+- **Two checks on every request.** The gateway lets a token through only if sqlitend issued it
+  *for this database*, it is not revoked or expired, and its signature verifies against that
+  database's key. sqld then verifies it again. Only that one `Authorization` header reaches sqld;
+  the query string and any other auth-like headers are dropped.
+- **Revocation works only through the gateway.** sqld cannot revoke a JWT, so a revoked token is
+  still accepted on sqld's own port until it expires. Keep `SQLITEND_HOST=127.0.0.1` so the
+  gateway is the only way in; sqlitend logs a boot warning otherwise.
+- **A refused token gets the same `404 not found` as an unknown database.** The reason is logged
+  on the server: `[gateway] denied <db>: token missing|malformed|unknown|wrong_database|revoked|expired|bad_signature|no_key`
+  (rate-limited to one line per database and reason every 10 s, with a suppressed count).
 - A hostname that doesn't match the template, names no database, or names a database that isn't
   running gets the same `404 not found`, so names can't be enumerated. An oversized body gets 413
   (`SQLITEND_GATEWAY_MAX_BODY_BYTES`, default 32 MiB), an unreachable sqld 502, and a request

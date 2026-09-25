@@ -2,7 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Server } from "bun";
 import type { DatabaseRow } from "../../src/db/repos/databases.ts";
 import {
+  checkToken,
   createGatewayHandler,
+  jtiFromAuthorization,
   keyFromHost,
   lookupByKey,
   maxSlugLength,
@@ -11,6 +13,11 @@ import {
   renderHost,
 } from "../../src/gateway/gateway.ts";
 import { loadConfig } from "../../src/config.ts";
+import { mintToken } from "../../src/auth/tokens.ts";
+import { createSignatureVerifier } from "../../src/auth/verify.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 const tpl = parseHostTemplate("{db}-libsql.cloudsby.me");
 
@@ -181,5 +188,110 @@ describe("gateway proxy (real upstream)", () => {
 
     dbs.push(row({ slug: "dead", port: 1 }));
     expect((await handler()(req("dead-libsql.cloudsby.me", { method: "POST", body: "{}" }))).status).toBe(502);
+  });
+});
+
+describe("gateway token allowlist", () => {
+  const jwt = (payload: object) =>
+    `Bearer ${Buffer.from('{"alg":"EdDSA"}').toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.sig`;
+  const NOW = 1_800_000_000_000;
+  const recs = new Map<string, { database_id: string; expires_at: number; revoked_at: number | null }>();
+  const lookup = (jti: string) => recs.get(jti) ?? null;
+
+  test("jtiFromAuthorization", () => {
+    expect(jtiFromAuthorization(null)).toBeNull();
+    expect(jtiFromAuthorization("Basic abc")).toBe("malformed");
+    expect(jtiFromAuthorization("Bearer not-a-jwt")).toBe("malformed");
+    expect(jtiFromAuthorization(jwt({ sub: "x" }))).toBe("malformed");
+    expect(jtiFromAuthorization(`Bearer a.${"!!"}.c`)).toBe("malformed");
+    expect(jtiFromAuthorization(jwt({ jti: "j1" }))).toBe("j1");
+  });
+
+  test.each([
+    ["missing", null, "db1"],
+    ["malformed", "Bearer x", "db1"],
+    ["unknown", "nope", "db1"],
+    ["wrong_database", "live", "db2"],
+    ["revoked", "rev", "db1"],
+    ["expired", "old", "db1"],
+  ])("denies %s", (reason, jti, dbId) => {
+    recs.set("live", { database_id: "db1", expires_at: NOW + 1, revoked_at: null });
+    recs.set("rev", { database_id: "db1", expires_at: NOW + 1000, revoked_at: NOW - 5 });
+    recs.set("old", { database_id: "db1", expires_at: NOW, revoked_at: null });
+    const header = jti === null ? null : jti.startsWith("Bearer") ? jti : jwt({ jti });
+    expect(checkToken(header, dbId, lookup, NOW)).toEqual({ ok: false, reason: reason as never });
+  });
+
+  test("accepts a live token bound to the database", () => {
+    recs.set("live", { database_id: "db1", expires_at: NOW + 1, revoked_at: null });
+    expect(checkToken(jwt({ jti: "live" }), "db1", lookup, NOW)).toEqual({ ok: true, jti: "live" });
+  });
+
+  test("handler: denied tokens get the uniform 404 and never reach upstream; accepted ones do + onUsed fires", async () => {
+    const r = row({ slug: "guarded", port: 9 });
+    let upstreamCalls = 0;
+    let lastUpstream: { url: string; headers: Headers } | null = null;
+    const used: string[] = [];
+    recs.set("ok", { database_id: r.id, expires_at: NOW + 60_000, revoked_at: null });
+    recs.set("gone", { database_id: r.id, expires_at: NOW + 60_000, revoked_at: NOW - 1 });
+    const h = createGatewayHandler({
+      template: tpl,
+      findDatabase: () => r,
+      upstreamHost: "127.0.0.1",
+      maxBodyBytes: 1024,
+      now: () => NOW,
+      tokens: {
+        lookup,
+        verifySignature: async (_db, jwt) => (jwt.endsWith(".sig") ? true : "bad_signature"),
+        onUsed: (jti) => used.push(jti),
+      },
+      fetchImpl: (async (url: string, init: RequestInit) => {
+        upstreamCalls++;
+        lastUpstream = { url, headers: new Headers(init.headers) };
+        return new Response("{}");
+      }) as unknown as typeof fetch,
+    });
+    const call = (auth?: string) =>
+      h(new Request("http://g/v2/pipeline", { method: "POST", body: "{}", headers: { host: "guarded-libsql.cloudsby.me", ...(auth ? { authorization: auth } : {}) } }));
+    for (const auth of [undefined, jwt({ jti: "gone" }), jwt({ jti: "nope" })]) {
+      const res = await call(auth);
+      expect(res.status).toBe(404);
+      expect(await res.text()).toBe("not found");
+    }
+    expect(upstreamCalls).toBe(0);
+    expect((await call(jwt({ jti: "ok" }))).status).toBe(200);
+    expect(upstreamCalls).toBe(1);
+    expect(used).toEqual(["ok"]);
+
+    // Lowercase scheme accepted; forged signature refused.
+    expect((await call(jwt({ jti: "ok" }).replace("Bearer", "bearer"))).status).toBe(200);
+    expect((await call(jwt({ jti: "ok" }).replace(/\.sig$/, ".forged"))).status).toBe(404);
+
+    // Only the checked Authorization reaches sqld: no query string, no other auth-ish headers.
+    await h(new Request("http://g/v2/pipeline?jwt=revoked-token", {
+      method: "POST", body: "{}",
+      headers: { host: "guarded-libsql.cloudsby.me", authorization: jwt({ jti: "ok" }), "x-proxy-authorization": "Bearer other", "x-auth-token": "t", "content-type": "application/json" },
+    }));
+    expect(lastUpstream!.url).toBe("http://127.0.0.1:9/v2/pipeline");
+    expect(lastUpstream!.headers.get("x-proxy-authorization")).toBeNull();
+    expect(lastUpstream!.headers.get("x-auth-token")).toBeNull();
+    expect(lastUpstream!.headers.get("authorization")).toBe(jwt({ jti: "ok" }));
+    expect(lastUpstream!.headers.get("content-type")).toBe("application/json");
+  });
+
+  test("real verifier: accepts a token minted for the db, rejects other db's token, no_key without a key", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "sqlitend-verify-"));
+    try {
+      const a = await mintToken({ dataRoot: root, dbSlug: "a", dbId: "db-a", scope: "full" }, 1);
+      const b = await mintToken({ dataRoot: root, dbSlug: "b", dbId: "db-b", scope: "full" }, 1);
+      const verify = createSignatureVerifier(root);
+      expect(await verify("db-a", a.token)).toBe(true);
+      expect(await verify("db-a", b.token)).toBe("bad_signature");
+      const [h0, p0] = a.token.split(".");
+      expect(await verify("db-a", `${h0}.${p0}.`)).toBe("bad_signature"); // alg-none style strip
+      expect(await verify("db-missing", a.token)).toBe("no_key");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

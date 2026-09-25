@@ -197,7 +197,7 @@ describe("migration", () => {
         .all().map((r) => (r as { id: string }).id);
 
     const before = versions();
-    expect(before).toEqual(["001_init", "002_failed_reason", "003_dns"]);
+    expect(before).toEqual(["001_init", "002_failed_reason", "003_dns", "004_token_management", "005_auth"]);
     migrate(db);
     migrate(db);
     expect(versions()).toEqual(before);
@@ -272,7 +272,11 @@ describe("migration-on-data (001 → full migrate)", () => {
       "running", 4242, 1_700_000_000_000, 6101, 6102,
       row.dataDir, "", 0, "v0.24.32", Date.now(),
     );
-    const tok = tRepo.create({ jti: uid(), databaseId: row.id, scope: "full", createdAt: Date.now(), expiresAt: Date.now() + 3600_000 });
+    // Same for tokens: 001 has no name/revoked_at/last_used_at columns.
+    const tok = { jti: uid() };
+    db001
+      .query("INSERT INTO tokens(jti, database_id, scope, created_at, expires_at) VALUES (?, ?, ?, ?, ?)")
+      .run(tok.jti, row.id, "full", Date.now(), Date.now() + 3600_000);
 
     // Apply the REAL migrations (001 skipped as already recorded, 002 applied).
     migrate(db001);
@@ -281,7 +285,7 @@ describe("migration-on-data (001 → full migrate)", () => {
     const versions = db001
       .query("SELECT id FROM schema_version ORDER BY id")
       .all().map((r) => (r as { id: string }).id);
-    expect(versions).toEqual(["001_init", "002_failed_reason", "003_dns"]);
+    expect(versions).toEqual(["001_init", "002_failed_reason", "003_dns", "004_token_management", "005_auth"]);
 
     // Data from the 001-era schema is intact after the upgrade.
     const w2 = wRepo.getById(ws.id)!;
@@ -293,6 +297,7 @@ describe("migration-on-data (001 → full migrate)", () => {
     const t2 = tRepo.listByDatabase(row.id);
     expect(t2).toHaveLength(1);
     expect(t2[0]!.jti).toBe(tok.jti);
+    expect(t2[0]!.revoked_at).toBeNull(); // 004 added the column, default NULL
 
     db001.close();
     rmSync(stale, { recursive: true, force: true });
