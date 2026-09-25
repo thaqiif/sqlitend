@@ -160,7 +160,7 @@ fi
 # With an operator command (set-password, enable-totp, disable-totp,
 # revoke-sessions, audit) runs the CLI; otherwise starts the server.
 case "\${1:-}" in
-  set-password|enable-totp|disable-totp|revoke-sessions|audit)
+  set-password|enable-totp|disable-totp|revoke-sessions|audit|gen-backup-key|backup-control|restore-control|restore-data)
     exec "$BUN" run --cwd "$APP_DIR" apps/server/src/cli.ts "\$@" ;;
 esac
 exec "$BUN" run --cwd "$APP_DIR" apps/server/src/index.ts "\$@"

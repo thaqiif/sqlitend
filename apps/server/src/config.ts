@@ -29,6 +29,8 @@ export interface BackupConfig {
   verifyAt: string | null;
   /** A database whose last successful verify is older than this is unhealthy, ms. */
   verifyMaxAgeMs: number;
+  /** Encrypted control-plane backup (metadata + signing keys); null when no key is set. */
+  control: { key: string; at: string; keep: number; maxAgeMs: number } | null;
 }
 
 export interface PortRange {
@@ -257,6 +259,7 @@ function loadBackupConfig(env: NodeJS.ProcessEnv): BackupConfig | null {
     retention,
     maxLagMs: parsePositiveInt("SQLITEND_BACKUP_MAX_LAG_SECONDS", env.SQLITEND_BACKUP_MAX_LAG_SECONDS, 300, 10, 86_400) * 1000,
     verifyAt: parseVerifyAt(get("SQLITEND_BACKUP_VERIFY_AT")),
+    control: loadControlBackup(env, get),
     verifyMaxAgeMs: parsePositiveInt("SQLITEND_BACKUP_VERIFY_MAX_AGE_HOURS", env.SQLITEND_BACKUP_VERIFY_MAX_AGE_HOURS, 48, 1, 24 * 60) * 3_600_000,
   };
 }
@@ -267,4 +270,19 @@ function parseVerifyAt(raw: string): string | null {
   const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(v);
   if (!m) throw new Error(`invalid SQLITEND_BACKUP_VERIFY_AT: "${raw}" (HH:MM, server local time, or off)`);
   return v;
+}
+
+function loadControlBackup(env: NodeJS.ProcessEnv, get: (k: string) => string): BackupConfig["control"] {
+  const key = get("SQLITEND_CONTROL_BACKUP_KEY");
+  if (!key) return null;
+  const raw = Buffer.from(key, key.includes("-") || key.includes("_") ? "base64url" : "base64");
+  if (raw.length !== 32) throw new Error("SQLITEND_CONTROL_BACKUP_KEY must be 32 bytes, base64 — generate one with `sqlitend gen-backup-key`");
+  const at = get("SQLITEND_CONTROL_BACKUP_AT") || "03:15";
+  if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(at)) throw new Error(`invalid SQLITEND_CONTROL_BACKUP_AT: "${at}" (HH:MM)`);
+  return {
+    key,
+    at,
+    keep: parsePositiveInt("SQLITEND_CONTROL_BACKUP_KEEP", env.SQLITEND_CONTROL_BACKUP_KEEP, 30, 1, 1000),
+    maxAgeMs: 48 * 3_600_000,
+  };
 }

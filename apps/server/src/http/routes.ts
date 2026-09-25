@@ -33,6 +33,7 @@ import type { Replicator } from "../backup/replicator.ts";
 import type { RestoreService } from "../backup/restore.ts";
 import { verifyHealth, type VerifyService } from "../backup/verify.ts";
 import type { VerificationsRepo } from "../db/repos/verifications.ts";
+import type { ControlBackupService } from "../backup/control.ts";
 import { RestoreRequestSchema, type BackupStatus, type RestoreRequest } from "@sqlitend/shared";
 import { installAuth, type AppEnv, type AuthDeps } from "./auth-routes.ts";
 import { maxSlugLength, parseHostTemplate, publicKeyFor, renderHost } from "../gateway/gateway.ts";
@@ -144,6 +145,7 @@ export interface RoutesDeps {
   /** Continuous S3 backup; absent when not configured. */
   backup?: Replicator | null;
   restore?: RestoreService | null;
+  control?: ControlBackupService | null;
   verify?: { service: VerifyService; results: VerificationsRepo; maxAgeMs: number; startedAt?: number } | null;
   /** Control-plane login; absent only with SQLITEND_AUTH=off (loopback dev). */
   auth?: AuthDeps | null;
@@ -377,6 +379,20 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     return c.json({ started: !alreadyRunning, alreadyRunning }, 202);
   });
 
+  // Encrypted control-plane backup (metadata + signing keys).
+  app.get("/api/backups/control", (c) =>
+    c.json(d.control ? d.control.status() : { enabled: false, lastAt: null, lastOkAt: null, lastKey: null, lastError: null, lastErrorAt: null }),
+  );
+  app.post("/api/backups/control", async (c) => {
+    if (!d.control) throw new ApiError(409, "control_backup_disabled", "set SQLITEND_CONTROL_BACKUP_KEY to enable control-plane backups");
+    try {
+      await d.control.runNow();
+    } catch (err) {
+      throw new ApiError(502, "control_backup_failed", "control-plane backup failed", (err as Error).message.slice(0, 300));
+    }
+    return c.json(d.control.status());
+  });
+
   app.get("/api/databases/:id/backup/verifications", (c) => {
     const row = requireDb(c.req.param("id"));
     return c.json(d.verify ? d.verify.results.history(row.id) : []);
@@ -573,6 +589,9 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
   function assertNotRestoreTarget(row: DbRow): void {
     if (row.status === "restoring" || d.restore?.isRestoring(row.id)) {
       throw new ApiError(409, "restoring", "a restore into this database is still running");
+    }
+    if ((row.failed_reason ?? "").startsWith("restore pending")) {
+      throw new ApiError(409, "restore_pending", "data not restored yet — run `sqlitend restore-data` with the server stopped");
     }
     if (row.status === "failed" && (row.failed_reason ?? "").startsWith("restore")) {
       throw new ApiError(409, "restore_failed", "this database is a failed restore target — delete it and restore again");

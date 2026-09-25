@@ -241,3 +241,13 @@ export const ReplicaInfoSchema = z.object({
   exists: z.boolean(),
 });
 export type ReplicaInfo = z.infer<typeof ReplicaInfoSchema>;
+
+export const ControlBackupStatusSchema = z.object({
+  enabled: z.boolean(),
+  lastAt: z.number().int().nullable(),
+  lastOkAt: z.number().int().nullable(),
+  lastKey: z.string().nullable(),
+  lastError: z.string().nullable(),
+  lastErrorAt: z.number().int().nullable(),
+});
+export type ControlBackupStatus = z.infer<typeof ControlBackupStatusSchema>;
