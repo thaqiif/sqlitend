@@ -47,6 +47,14 @@ export const DatabaseSchema = z.object({
   sqldVersion: z.string().nullable(),
   /** Last launch failure (sqld stderr tail) — null after a successful start. */
   failedReason: z.string().nullable(),
+  /** Managed public DNS record; status null when DNS automation is off. */
+  dns: z
+    .object({
+      hostname: z.string().nullable(),
+      status: z.enum(["active", "error", "conflict"]).nullable(),
+      error: z.string().nullable(),
+    })
+    .default({ hostname: null, status: null, error: null }),
   createdAt: z.number().int(),
 });
 export type Database = z.infer<typeof DatabaseSchema>;

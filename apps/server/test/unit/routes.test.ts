@@ -7,7 +7,8 @@ import { migrate, openDb } from "../../src/db/metadata.ts";
 import { DatabasesRepo, type DatabaseRow } from "../../src/db/repos/databases.ts";
 import { TokensRepo } from "../../src/db/repos/tokens.ts";
 import { WorkspacesRepo } from "../../src/db/repos/workspaces.ts";
-import { createRoutes } from "../../src/http/routes.ts";
+import { createRoutes, type RoutesDeps } from "../../src/http/routes.ts";
+import type { DnsManager } from "../../src/dns/manager.ts";
 import { loadConfig } from "../../src/config.ts";
 import { createPortAllocator } from "../../src/supervisor/ports.ts";
 import type { Supervisor } from "../../src/supervisor/supervisor.ts";
@@ -71,6 +72,7 @@ function makeApp(over: {
   sqldOk?: boolean;
   publicHost?: string;
   gatewayHostTemplate?: string;
+  dns?: RoutesDeps["dns"];
 } = {}) {
   return createRoutes({
     config: loadConfig({}, {
@@ -86,6 +88,7 @@ function makeApp(over: {
     sqldOk: over.sqldOk ?? true,
     sqldVersion: "fake",
     version: "test",
+    dns: over.dns ?? null,
   });
 }
 
@@ -403,5 +406,43 @@ describe("delete / tokens / metrics routes", () => {
     expect(body.error.message).toBe("internal error");
     // The internals (stack / message) are NOT leaked to the client.
     expect(JSON.stringify(body)).not.toContain("booooom");
+  });
+});
+
+describe("dns routes", () => {
+  function fakeDns() {
+    const log: string[] = [];
+    const mgr = {
+      sync: async (row: DatabaseRow) => {
+        log.push(`sync ${row.slug}`);
+        databases.setDns(row.id, { hostname: `${row.slug}-libsql.cloudsby.me`, recordId: "rec1", status: "active", error: null });
+      },
+      remove: async (row: DatabaseRow) => { log.push(`remove ${row.dns_record_id}`); },
+    } as unknown as DnsManager;
+    return { mgr, log };
+  }
+
+  test("create syncs DNS and returns the dns state; delete removes it", async () => {
+    const { mgr, log } = fakeDns();
+    const app = makeApp({ gatewayHostTemplate: "{db}-libsql.cloudsby.me", dns: mgr });
+    const w = workspaces.create(wsRow(`ws-${uid().slice(0, 8)}`));
+    const res = await send(app, "POST", `/api/workspaces/${w.id}/databases`, { name: "Bots Prod" });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string; dns: { hostname: string; status: string; error: string | null } };
+    expect(body.dns).toEqual({ hostname: "bots-prod-libsql.cloudsby.me", status: "active", error: null });
+    expect((await send(app, "DELETE", `/api/databases/${body.id}`)).status).toBe(204);
+    expect(log).toEqual(["sync bots-prod", "remove rec1"]);
+  });
+
+  test("POST /dns/sync: 409 when disabled, re-syncs when enabled", async () => {
+    const w = workspaces.create(wsRow(`ws-${uid().slice(0, 8)}`));
+    const row = databases.create(dbRow(w.id, { slug: "x" }));
+    const off = await send(makeApp(), "POST", `/api/databases/${row.id}/dns/sync`);
+    expect(off.status).toBe(409);
+    const { mgr, log } = fakeDns();
+    const on = await send(makeApp({ dns: mgr }), "POST", `/api/databases/${row.id}/dns/sync`);
+    expect(on.status).toBe(200);
+    expect(((await on.json()) as { dns: { status: string } }).dns.status).toBe("active");
+    expect(log).toEqual(["sync x"]);
   });
 });

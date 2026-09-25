@@ -63,7 +63,8 @@ function row(over: Partial<DatabaseRow>): DatabaseRow {
   return {
     id: crypto.randomUUID(), workspace_id: crypto.randomUUID(), slug: "bots-prod", name: "Bots", status: "running",
     pid: 1, start_time: 0, port: null, grpc_port: null, data_dir: "/x", auth_key: null, auto_start: 1,
-    sqld_version: null, failed_reason: null, created_at: 0, ...over,
+    sqld_version: null, failed_reason: null, dns_hostname: null, dns_record_id: null, dns_status: null, dns_error: null,
+    created_at: 0, ...over,
   };
 }
 

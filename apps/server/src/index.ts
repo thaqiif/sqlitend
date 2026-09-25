@@ -29,6 +29,8 @@ import { Sampler, type SamplerRow } from "./metrics/sampler.ts";
 import { createRoutes } from "./http/routes.ts";
 import { createStaticHandler, isAllowedHost } from "./http/static.ts";
 import { createGatewayHandler, lookupByKey, parseHostTemplate } from "./gateway/gateway.ts";
+import { CloudflareDns } from "./dns/cloudflare.ts";
+import { DnsManager } from "./dns/manager.ts";
 
 export const VERSION = "0.1.0";
 
@@ -102,7 +104,24 @@ sampler.start(samplerProvider);
 // ---------------------------------------------------------------------------
 // API + static
 // ---------------------------------------------------------------------------
+const dns = config.cloudflareDns && config.gatewayHostTemplate
+  ? new DnsManager({
+      cf: new CloudflareDns({ apiToken: config.cloudflareDns.apiToken, zoneId: config.cloudflareDns.zoneId, apiBase: config.cloudflareDns.apiBase }),
+      template: parseHostTemplate(config.gatewayHostTemplate),
+      target: `${config.cloudflareDns.tunnelId}.cfargotunnel.com`,
+      databases,
+    })
+  : null;
+if (dns) {
+  // Background: boot must not wait on the Cloudflare API.
+  void dns.reconcileAll().then(
+    (r) => console.log(`[dns] boot reconcile: ${r.synced} synced, ${r.failed} failed`),
+    (err) => console.warn(`[dns] boot reconcile failed: ${(err as Error).message}`),
+  );
+}
+
 const routes = createRoutes({
+  dns,
   config,
   workspaces,
   databases,

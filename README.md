@@ -77,6 +77,7 @@ All settings via environment variables (see [`.env.example`](.env.example)):
 - `SQLITEND_SAMPLE_INTERVAL_MS` – metrics sampler + UI poll interval in MILLISECONDS (250–600000, default `5000`)
 - `SQLITEND_READY_TIMEOUT_MS` – sqld launch ready probe timeout in MILLISECONDS (500–120000, default `10000`)
 - `SQLITEND_GATEWAY_PORT` / `SQLITEND_GATEWAY_HOST` / `SQLITEND_GATEWAY_HOST_TEMPLATE` – optional host-routed gateway giving each database a public HTTPS name such as `https://<db>-libsql.example.com` (off by default; see [`docs/gateway.md`](docs/gateway.md))
+- `SQLITEND_CF_API_TOKEN` / `SQLITEND_CF_ZONE_ID` / `SQLITEND_CF_TUNNEL_ID` – optional: create/remove each database's DNS record in Cloudflare automatically (requires the gateway)
 - `SQLITEND_MAX_BODY_BYTES` – maximum accepted JSON body size for mutating API calls, in bytes (default `1000000`)
 
 ### Control-plane access

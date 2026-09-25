@@ -20,6 +20,10 @@ export interface DatabaseRow {
   auto_start: number;
   sqld_version: string | null;
   failed_reason: string | null;
+  dns_hostname: string | null;
+  dns_record_id: string | null;
+  dns_status: string | null;
+  dns_error: string | null;
   created_at: number;
 }
 
@@ -52,7 +56,8 @@ export interface RuntimeUpdate {
 
 const SELECT_FIELDS =
   "id, workspace_id, slug, name, status, pid, start_time, port, grpc_port, " +
-  "data_dir, auth_key, auto_start, sqld_version, failed_reason, created_at";
+  "data_dir, auth_key, auto_start, sqld_version, failed_reason, " +
+  "dns_hostname, dns_record_id, dns_status, dns_error, created_at";
 
 export class DatabasesRepo {
   constructor(private readonly db: Database) {}
@@ -95,6 +100,10 @@ export class DatabasesRepo {
       auto_start: input.auto_start ?? 1,
       sqld_version: input.sqld_version ?? null,
       failed_reason: null,
+      dns_hostname: null,
+      dns_record_id: null,
+      dns_status: null,
+      dns_error: null,
       created_at: input.created_at,
     };
     try {
@@ -168,6 +177,13 @@ export class DatabasesRepo {
    */
   setFailedReason(dbId: string, reason: string | null): void {
     this.db.query("UPDATE databases SET failed_reason = ? WHERE id = ?").run(reason, dbId);
+  }
+
+  /** Record the Cloudflare DNS state for a database (straight SET, clearable). */
+  setDns(dbId: string, dns: { hostname: string | null; recordId: string | null; status: string | null; error: string | null }): void {
+    this.db
+      .query("UPDATE databases SET dns_hostname = ?, dns_record_id = ?, dns_status = ?, dns_error = ? WHERE id = ?")
+      .run(dns.hostname, dns.recordId, dns.status, dns.error, dbId);
   }
 
   get count(): number {

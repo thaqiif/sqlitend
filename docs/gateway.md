@@ -64,14 +64,36 @@ rules *above* the wildcard (e.g. `hostname: tgbulk.cloudsby.me`). The first matc
 
 ## 3. DNS: one record per database
 
+### Automatic (recommended)
+
+Give sqlitend a Cloudflare API token and it manages the records itself:
+
+```ini
+SQLITEND_CF_API_TOKEN=<token>        # Cloudflare dashboard → My Profile → API Tokens → Create
+                                     # permission: Zone → DNS → Edit; zone resources: cloudsby.me only
+SQLITEND_CF_ZONE_ID=<zone id>        # cloudsby.me → Overview → API → Zone ID
+SQLITEND_CF_TUNNEL_ID=<TUNNEL-UUID>  # from `cloudflared tunnel create`
+```
+
+- **Create a database:** sqlitend creates a proxied CNAME `<slug>-libsql.cloudsby.me →
+  <TUNNEL-UUID>.cfargotunnel.com` with the comment `managed-by:sqlitend db:<id>`.
+- **Delete a database:** sqlitend deletes that record, but only if it still carries the comment.
+- **Boot:** every database without an active record is synced in the background.
+- **Failures never block the database.** The database panel shows `DNS …: error|conflict` with the
+  reason and a **Retry DNS** button (`POST /api/databases/:id/dns/sync`).
+- **Records sqlitend didn't create are never touched.** If a name is already taken by a hand-made
+  record, the status is `conflict` and the record is left alone.
+
+### Manual
+
+Without the token, create each record yourself:
+
 ```sh
 cloudflared tunnel route dns server-a bots-prod-libsql.cloudsby.me
 ```
 
-This creates a proxied CNAME `bots-prod-libsql → <TUNNEL-UUID>.cfargotunnel.com`. Do it once per
-database. (A wildcard `*` record would also work, but it would send every unknown `*.cloudsby.me`
-name to server A. Per-database records are explicit. Automating them from sqlitend through the
-Cloudflare API is on the backlog.)
+This creates a proxied CNAME to the tunnel. (A wildcard `*` record would also work, but it would
+send every unknown `*.cloudsby.me` name to server A.)
 
 ## 4. Connect
 

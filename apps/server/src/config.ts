@@ -45,6 +45,8 @@ export interface Config {
   gatewayHostTemplate: string | null;
   /** Max proxied request body, bytes (Hrana batches can be large). */
   gatewayMaxBodyBytes: number;
+  /** Cloudflare DNS automation; null when disabled. Requires the gateway. */
+  cloudflareDns: { apiToken: string; zoneId: string; tunnelId: string; apiBase: string } | null;
 }
 
 const DEFAULT_HOST = "0.0.0.0";
@@ -111,6 +113,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     readyTimeoutMs: parsePositiveInt("SQLITEND_READY_TIMEOUT_MS", env.SQLITEND_READY_TIMEOUT_MS, 10_000, 500, 120_000),
     maxBodyBytes: parsePositiveInt("SQLITEND_MAX_BODY_BYTES", env.SQLITEND_MAX_BODY_BYTES, 1_000_000, 1024, 64 * 1024 * 1024),
     ...loadGatewayConfig(env),
+    cloudflareDns: loadCloudflareDnsConfig(env),
     ...overrides,
   };
 }
@@ -128,4 +131,20 @@ function loadGatewayConfig(env: NodeJS.ProcessEnv): Pick<Config, "gatewayPort" |
     gatewayHostTemplate: gatewayPort > 0 ? template : null,
     gatewayMaxBodyBytes: parsePositiveInt("SQLITEND_GATEWAY_MAX_BODY_BYTES", env.SQLITEND_GATEWAY_MAX_BODY_BYTES, 32 * 1024 * 1024, 1024, 256 * 1024 * 1024),
   };
+}
+
+function loadCloudflareDnsConfig(env: NodeJS.ProcessEnv): Config["cloudflareDns"] {
+  const apiToken = env.SQLITEND_CF_API_TOKEN?.trim() || "";
+  const zoneId = env.SQLITEND_CF_ZONE_ID?.trim() || "";
+  const tunnelId = env.SQLITEND_CF_TUNNEL_ID?.trim() || "";
+  const set = [apiToken, zoneId, tunnelId].filter(Boolean).length;
+  if (set === 0) return null;
+  if (set !== 3) {
+    throw new Error("Cloudflare DNS automation needs all of SQLITEND_CF_API_TOKEN, SQLITEND_CF_ZONE_ID and SQLITEND_CF_TUNNEL_ID");
+  }
+  if (!env.SQLITEND_GATEWAY_PORT || env.SQLITEND_GATEWAY_PORT === "0" || !env.SQLITEND_GATEWAY_HOST_TEMPLATE?.trim()) {
+    throw new Error("Cloudflare DNS automation requires the gateway (SQLITEND_GATEWAY_PORT + SQLITEND_GATEWAY_HOST_TEMPLATE)");
+  }
+  if (!/^[0-9a-f-]{36}$/i.test(tunnelId)) throw new Error(`invalid SQLITEND_CF_TUNNEL_ID: "${tunnelId}" (expected the tunnel UUID)`);
+  return { apiToken, zoneId, tunnelId, apiBase: env.SQLITEND_CF_API_BASE?.trim() || "https://api.cloudflare.com/client/v4" };
 }
