@@ -305,7 +305,7 @@ describe("restore routes", () => {
     });
   }
   const post = (a: ReturnType<typeof app>, p: string, body: unknown) =>
-    a.request(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    a.request(p, { method: "POST", headers: { "content-type": "application/json", "x-sqlitend-csrf": "1" }, body: JSON.stringify(body) });
   const SRC = "11111111-2222-3333-4444-555555555555";
 
   test("202 + a restoring row with auto_start=0 and ports; job runs to running", async () => {
@@ -314,7 +314,8 @@ describe("restore routes", () => {
     const res = await post(a, `/api/backups/${SRC}/restore`, { name: "Bots restored", workspaceId: wsId });
     expect(res.status).toBe(202);
     const body = (await res.json()) as { id: string; status: string; slug: string; port: number; autoStart: boolean };
-    expect(body).toMatchObject({ status: "restoring", slug: "bots-restored", autoStart: false });
+    expect(body).toMatchObject({ status: "restoring", name: "Bots restored", autoStart: false });
+    expect(body.slug).toMatch(/^[a-z][a-z0-9]{11}$/);
     expect(body.port).toBeGreaterThan(0);
     await svc.settled(body.id);
     expect(databases.getById(body.id)!.status).toBe("running");
@@ -330,14 +331,14 @@ describe("restore routes", () => {
     const a = app(svc);
     const { id } = (await (await post(a, `/api/backups/${SRC}/restore`, { name: "guarded", workspaceId: wsId })).json()) as { id: string };
     for (const action of ["start", "stop"]) {
-      const r = await a.request(`/api/databases/${id}/${action}`, { method: "POST" });
+      const r = await a.request(`/api/databases/${id}/${action}`, { method: "POST", headers: { "x-sqlitend-csrf": "1" } });
       expect(r.status).toBe(409);
       expect(((await r.json()) as { error: { code: string } }).error.code).toBe("restoring");
     }
     release();
     await svc.settled(id);
     expect(databases.getById(id)!.status).toBe("failed");
-    const r = await a.request(`/api/databases/${id}/start`, { method: "POST" });
+    const r = await a.request(`/api/databases/${id}/start`, { method: "POST", headers: { "x-sqlitend-csrf": "1" } });
     expect(r.status).toBe(409);
     expect(((await r.json()) as { error: { code: string } }).error.code).toBe("restore_failed");
   });
@@ -352,7 +353,7 @@ describe("restore routes", () => {
     const a = app(svc);
     const { id } = (await (await post(a, `/api/backups/${SRC}/restore`, { name: "slow", workspaceId: wsId })).json()) as { id: string };
     expect(databases.getById(id)!.auto_start).toBe(0);
-    expect((await a.request(`/api/databases/${id}`, { method: "DELETE" })).status).toBe(409);
+    expect((await a.request(`/api/databases/${id}`, { method: "DELETE", headers: { "x-sqlitend-csrf": "1" } })).status).toBe(409);
     release();
     await svc.settled(id);
   });

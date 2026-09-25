@@ -96,8 +96,8 @@ const send = (app: ReturnType<typeof createRoutes>, method: string, pathname: st
   app.request(
     pathname,
     body === undefined
-      ? { method }
-      : { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+      ? { method, headers: { "x-sqlitend-csrf": "1" } }
+      : { method, headers: { "content-type": "application/json", "x-sqlitend-csrf": "1" }, body: JSON.stringify(body) },
   );
 
 beforeEach(() => {
@@ -120,7 +120,7 @@ const dbRow = (workspaceId: string, over: Partial<Parameters<DatabasesRepo["crea
   id: uid(),
   workspace_id: workspaceId,
   slug: `db-${uid().slice(0, 8)}`,
-  name: "A database",
+  name: `A database ${uid().slice(0, 8)}`,
   data_dir: path.join(dir, "workspaces", "ws", "db"),
   created_at: Date.now(),
   ...over,
@@ -172,7 +172,6 @@ describe("databases routes", () => {
   });
 
   test("POST .../databases -> 502 start_failed and the row is persisted failed with a reason", async () => {
-    mkdirSync(path.join(dir, "workspaces", "ws", "dbs", "demo"), { recursive: true });
     const failLaunch = async () => ({ ok: false, error: "boom" });
     const app = makeApp({ supervisor: stubSupervisor({ startDatabase: failLaunch }) });
     const ws = workspaces.create(wsRow("main"));
@@ -182,22 +181,29 @@ describe("databases routes", () => {
     const body = (await res.json()) as { error: { code: string; detail?: string } };
     expect(body.error.code).toBe("start_failed");
     // The row is created (failed), and its failed_reason carries the diagnostic.
-    const row = databases.getBySlug("demo");
+    const row = databases.list().find((r) => r.name === "demo") ?? null;
     expect(row).not.toBeNull();
     expect(row!.status).toBe("failed");
     expect(row!.failed_reason).toBeTruthy();
   });
 
-  test("POST .../databases duplicate slug -> 409 slug_conflict", async () => {
+  test("same name: 409 name_conflict in one workspace (case-insensitive), allowed in another", async () => {
     const app = makeApp();
     const ws = workspaces.create(wsRow("main"));
+    const other = workspaces.create(wsRow("other"));
     const first = await send(app, "POST", `/api/workspaces/${ws.id}/databases`, { name: "Demo DB" });
     expect(first.status).toBe(201);
 
-    const second = await send(app, "POST", `/api/workspaces/${ws.id}/databases`, { name: "Demo DB" });
+    const second = await send(app, "POST", `/api/workspaces/${ws.id}/databases`, { name: "demo db" });
     expect(second.status).toBe(409);
     const body = (await second.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("slug_conflict");
+    expect(body.error.code).toBe("name_conflict");
+
+    const elsewhere = await send(app, "POST", `/api/workspaces/${other.id}/databases`, { name: "Demo DB" });
+    expect(elsewhere.status).toBe(201);
+    const a = (await first.json()) as { slug: string };
+    const b = (await elsewhere.json()) as { slug: string };
+    expect(a.slug).not.toBe(b.slug);
   });
 
   test("POST .../databases happy path creates a running database", async () => {
@@ -205,8 +211,9 @@ describe("databases routes", () => {
     const ws = workspaces.create(wsRow("main"));
     const res = await send(app, "POST", `/api/workspaces/${ws.id}/databases`, { name: "demo" });
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { status: string; slug: string };
-    expect(body.slug).toBe("demo");
+    const body = (await res.json()) as { status: string; slug: string; name: string };
+    expect(body.slug).toMatch(/^[a-z][a-z0-9]{11}$/); // random, not derived from the name
+    expect(body.name).toBe("demo");
     expect(body.status).toBe("running");
   });
 });
@@ -256,13 +263,13 @@ describe("start / stop routes", () => {
     expect(on.publicUrl).toBe("https://bots-prod-libsql.cloudsby.me");
   });
 
-  test("create rejects names whose slug cannot fit a DNS label under the gateway template", async () => {
+  test("long names are fine: the public hostname uses the random slug", async () => {
     const app = makeApp({ gatewayHostTemplate: "{db}-libsql.cloudsby.me" });
-    const res = await send(app, "POST", `/api/workspaces/${ws().id}/databases`, { name: "x".repeat(57) });
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("name_too_long");
-    const fits = await send(app, "POST", `/api/workspaces/${ws().id}/databases`, { name: "y".repeat(56) });
-    expect(fits.status).toBe(201);
+    const res = await send(app, "POST", `/api/workspaces/${ws().id}/databases`, { name: "x".repeat(120) });
+    expect(res.status).toBe(201);
+    const { id, slug } = (await res.json()) as { id: string; slug: string };
+    const conn = (await (await send(app, "GET", `/api/databases/${id}/connection`)).json()) as { publicUrl: string };
+    expect(conn.publicUrl).toBe(`https://${slug}-libsql.cloudsby.me`);
   });
 
   test("connection URLs advertise SQLITEND_PUBLIC_HOST when configured", async () => {
@@ -471,9 +478,9 @@ describe("dns routes", () => {
     const res = await send(app, "POST", `/api/workspaces/${w.id}/databases`, { name: "Bots Prod" });
     expect(res.status).toBe(201);
     const body = (await res.json()) as { id: string; dns: { hostname: string; status: string; error: string | null } };
-    expect(body.dns).toEqual({ hostname: "bots-prod-libsql.cloudsby.me", status: "active", error: null });
+    expect(body.dns).toEqual({ hostname: expect.stringMatching(/^[a-z][a-z0-9]{11}-libsql\.cloudsby\.me$/), status: "active", error: null });
     expect((await send(app, "DELETE", `/api/databases/${body.id}`)).status).toBe(204);
-    expect(log).toEqual(["sync bots-prod", "remove rec1"]);
+    expect(log).toEqual([`sync ${body.dns.hostname.split("-libsql")[0]}`, "remove rec1"]);
   });
 
   test("POST /dns/sync: 409 when disabled, re-syncs when enabled", async () => {
@@ -486,5 +493,48 @@ describe("dns routes", () => {
     expect(on.status).toBe(200);
     expect(((await on.json()) as { dns: { status: string } }).dns.status).toBe("active");
     expect(log).toEqual(["sync x"]);
+  });
+});
+
+describe("random database slugs", () => {
+  test("12 chars, starts with a letter, [a-z0-9] only, no repeats over many draws", async () => {
+    const { randomDbSlug } = await import("../../src/http/routes.ts");
+    const seen = new Set<string>();
+    for (let i = 0; i < 5000; i++) {
+      const s = randomDbSlug();
+      expect(s).toMatch(/^[a-z][a-z0-9]{11}$/);
+      seen.add(s);
+    }
+    expect(seen.size).toBe(5000);
+  });
+
+  test("migration 007 keeps existing slugs and allows the same name in two workspaces", () => {
+    const a = workspaces.create(wsRow(`ws-${uid().slice(0, 8)}`));
+    const b = workspaces.create(wsRow(`ws-${uid().slice(0, 8)}`));
+    const legacy = databases.create(dbRow(a.id, { slug: "bots-prod", name: "Bots" }));
+    expect(databases.getBySlug("bots-prod")!.id).toBe(legacy.id);
+    expect(() => databases.create(dbRow(b.id, { name: "Bots" }))).not.toThrow();
+    expect(() => databases.create(dbRow(a.id, { name: "BOTS" }))).toThrow(/already exists in this workspace/);
+  });
+});
+
+describe("SQLITEND_AUTH=off (no login, e.g. behind Cloudflare Access)", () => {
+  test("no session needed, but mutating calls still need the CSRF header; audit still records", async () => {
+    const { AuthRepo } = await import("../../src/db/repos/auth.ts");
+    const auditRepo = new AuthRepo(db);
+    const app = createRoutes({
+      config: loadConfig({}, { dataRoot: dir }),
+      workspaces, databases, tokens,
+      supervisor: stubSupervisor(), sampler: stubSampler, sqldOk: true, sqldVersion: "fake", version: "test",
+      auth: null, auditRepo,
+    });
+    expect((await app.request("/api/workspaces")).status).toBe(200);
+    expect((await app.request("/api/auth/session")).status).toBe(404); // the UI reads this as "open"
+    const noCsrf = await app.request("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "x" }) });
+    expect(noCsrf.status).toBe(403);
+    const ok = await send(app, "POST", "/api/workspaces", { name: "Audited" });
+    expect(ok.status).toBe(201);
+    const audit = (await (await app.request("/api/audit")).json()) as { action: string; actor: string; outcome: string }[];
+    expect(audit[0]).toMatchObject({ action: "workspace.create", actor: "admin", outcome: "ok" });
   });
 });

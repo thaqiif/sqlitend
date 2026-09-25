@@ -11,7 +11,10 @@ cloudflared on server A  →  http://127.0.0.1:6080  (sqlitend gateway)
 sqld for that database on 127.0.0.1:<port>   (verifies the JWT)
 ```
 
-The hostname format is `<slug-or-id>-libsql.cloudsby.me`. It stays **one level deep**, so the free
+The hostname format is `<slug-or-id>-libsql.cloudsby.me`. Since v0.1.3 a new database's slug is **12 random
+characters** (e.g. `k7q2m9x4p1zd-libsql.cloudsby.me`), never derived from its name. Names only need to be
+unique within a workspace, and hostnames reveal nothing about what's inside. Databases created earlier keep their
+name-based slug, so their hostnames don't change. The hostname stays **one level deep**, so the free
 Universal SSL certificate covers it. A two-level name like `bots.libsql.cloudsby.me` would need
 Advanced Certificate Manager.
 
@@ -132,6 +135,11 @@ SQLITEND_COOKIE_SECURE=on                        # TLS terminates at Cloudflare
 Tunnel ingress: `sqlitend.example.com → http://127.0.0.1:6100`. Add an Access app for that hostname with
 an allow policy on your email.
 
+**Letting Cloudflare Access be the only login.** Set `SQLITEND_AUTH=off`. It is only accepted with a loopback
+`SQLITEND_HOST`, which is how this setup runs. The dashboard then opens with no login screen. The CSRF header is still
+required on every change, and the audit log still records everything. Boot prints a loud warning naming the
+dashboard hostname. **Without Access in front, anyone who can reach that hostname is admin.**
+
 ## Behaviour and security notes
 
 - **Two checks on every request.** The gateway lets a token through only if sqlitend issued it
@@ -150,8 +158,6 @@ an allow policy on your email.
   taking over 240 s 504. WebSocket upgrades get 501 for every host.
 - Databases created before the gateway was on, with slugs too long for a DNS label, are published
   under their id (`https://<uuid>-libsql…`).
-- With the gateway on, a database name whose slug won't fit a DNS label (56 characters with the
-  `-libsql` suffix) is rejected at creation.
 - The control plane (`:6100`) is **not** routed by the tunnel by default. Reach it over SSH/Tailscale, or publish
   exactly one named hostname through `SQLITEND_DASHBOARD_HOSTS` (above), behind Cloudflare Access. Never use a wildcard.
 - Optional hardening: put a Cloudflare Access application with a *service token* on the libsql

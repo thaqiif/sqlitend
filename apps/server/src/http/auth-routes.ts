@@ -68,6 +68,47 @@ function matchAction(method: string, path: string): { action: string; target: st
   return null;
 }
 
+/** Audit log of state-changing calls + its read endpoint (with or without login). */
+export function installAudit(app: Hono<AppEnv>, repo: AuthDeps["repo"]): void {
+  app.use("/api/*", async (c, next) => {
+    await next();
+    if (!isMutating(c.req.method)) return;
+    const hit = matchAction(c.req.method, c.req.path);
+    if (!hit) return; // login is audited explicitly with its reason
+    const status = c.res.status;
+    repo.audit({
+      actor: c.get("actor") ?? "anonymous",
+      ip: ipOf(c),
+      action: hit.action,
+      target: hit.target,
+      outcome: status < 400 ? "ok" : status === 401 || status === 403 ? "denied" : "error",
+      detail: status < 400 ? null : `HTTP ${status}`,
+    });
+  });
+
+
+  app.get("/api/audit", (c) => {
+    const limit = Math.min(500, Math.max(1, Number(c.req.query("limit") ?? 100) || 100));
+    const before = c.req.query("before");
+    const rows = repo.listAudit(limit, before ? Number(before) : undefined);
+    return c.json(rows.map((r) => ({ id: r.id, at: r.at, actor: r.actor, ip: r.ip, action: r.action, target: r.target, outcome: r.outcome, detail: r.detail })));
+  });
+}
+
+/** SQLITEND_AUTH=off: no login, but state-changing calls still need the CSRF
+ *  header, so a cross-site form/fetch riding on a Cloudflare Access cookie
+ *  (SameSite=None) can't act on the dashboard. */
+export function installCsrfOnly(app: Hono<AppEnv>, repo: AuthDeps["repo"] | null): void {
+  app.use("/api/*", async (c, next) => {
+    if (isMutating(c.req.method) && c.req.header(CSRF_HEADER) !== "1") {
+      return c.json({ error: { code: "csrf", message: `missing ${CSRF_HEADER} header` } }, 403);
+    }
+    c.set("actor", "admin");
+    return next();
+  });
+  if (repo) installAudit(app, repo);
+}
+
 export function installAuth(app: Hono<AppEnv>, auth: AuthDeps): void {
   const { service, repo } = auth;
 
@@ -91,22 +132,7 @@ export function installAuth(app: Hono<AppEnv>, auth: AuthDeps): void {
   };
   app.use("/api/*", gate);
 
-  // ---- audit ---------------------------------------------------------------
-  app.use("/api/*", async (c, next) => {
-    await next();
-    if (!isMutating(c.req.method)) return;
-    const hit = matchAction(c.req.method, c.req.path);
-    if (!hit) return; // login is audited explicitly with its reason
-    const status = c.res.status;
-    repo.audit({
-      actor: c.get("actor") ?? "anonymous",
-      ip: ipOf(c),
-      action: hit.action,
-      target: hit.target,
-      outcome: status < 400 ? "ok" : status === 401 || status === 403 ? "denied" : "error",
-      detail: status < 400 ? null : `HTTP ${status}`,
-    });
-  });
+  installAudit(app, repo);
 
   // ---- endpoints -------------------------------------------------------------
   app.get("/api/auth/session", (c) => {
@@ -159,10 +185,4 @@ export function installAuth(app: Hono<AppEnv>, auth: AuthDeps): void {
     return c.body(null, 204);
   });
 
-  app.get("/api/audit", (c) => {
-    const limit = Math.min(500, Math.max(1, Number(c.req.query("limit") ?? 100) || 100));
-    const before = c.req.query("before");
-    const rows = repo.listAudit(limit, before ? Number(before) : undefined);
-    return c.json(rows.map((r) => ({ id: r.id, at: r.at, actor: r.actor, ip: r.ip, action: r.action, target: r.target, outcome: r.outcome, detail: r.detail })));
-  });
 }

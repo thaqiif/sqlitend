@@ -37,7 +37,7 @@ export function BackupsPage({
   useEffect(() => {
     api
       .listReplicas()
-      .then((r) => setRows(r.sort((a, b) => Number(a.exists) - Number(b.exists) || (a.slug ?? a.id).localeCompare(b.slug ?? b.id))))
+      .then((r) => setRows(r.sort((a, b) => Number(a.exists) - Number(b.exists) || (a.name ?? a.slug ?? a.id).localeCompare(b.name ?? b.slug ?? b.id))))
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to list backups"));
   }, []);
 
@@ -93,7 +93,7 @@ export function BackupsPage({
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td>{r.slug ?? <span className="muted">unknown (no manifest)</span>}</td>
+                  <td>{r.name ?? r.slug ?? <span className="muted">unknown (no manifest)</span>}{r.name && r.slug && <span className="db-slug">{r.slug}</span>}</td>
                   <td>
                     <span className={`scope-badge ${r.exists ? "token-active" : "token-expired"}`}>{r.exists ? "live" : "deleted"}</span>
                   </td>
@@ -113,7 +113,7 @@ export function BackupsPage({
       {restoring && (
         <RestoreDialog
           sourceId={restoring.id}
-          sourceLabel={restoring.slug ?? restoring.id.slice(0, 8)}
+          sourceLabel={restoring.name ?? restoring.slug ?? restoring.id.slice(0, 8)}
           workspaces={workspaces}
           defaultWorkspaceId={restoring.workspaceId}
           onClose={() => setRestoring(null)}

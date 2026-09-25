@@ -44,7 +44,7 @@ import { ControlBackupService, parseBackupKey, snapshotControlPlane } from "./ba
 import { VerificationsRepo } from "./db/repos/verifications.ts";
 import { healthReport } from "./http/health.ts";
 
-export const VERSION = "0.1.2";
+export const VERSION = "0.1.3";
 
 // ---------------------------------------------------------------------------
 // Config + persistence (fail loudly and actionably on fs problems)
@@ -132,7 +132,7 @@ if (dns) {
   );
 }
 
-if (config.dashboardHosts.length > 0 && config.cookieSecure !== "on") {
+if (config.authEnabled && config.dashboardHosts.length > 0 && config.cookieSecure !== "on") {
   console.warn(
     `[auth] WARNING: SQLITEND_DASHBOARD_HOSTS is set (${config.dashboardHosts.join(", ")}) but SQLITEND_COOKIE_SECURE is not "on" — ` +
       "behind a TLS-terminating tunnel the session cookie would be issued without Secure",
@@ -256,7 +256,13 @@ if (replicator) {
 }
 
 const authService = config.authEnabled ? new AuthService(authRepo) : null;
-if (!config.authEnabled) console.warn("[auth] WARNING: SQLITEND_AUTH=off — the control plane has no login (loopback dev only)");
+if (!config.authEnabled) {
+  console.warn(
+    config.dashboardHosts.length > 0
+      ? `[auth] WARNING: SQLITEND_AUTH=off — NO LOGIN. Anyone who reaches ${config.dashboardHosts.join(", ")} has full admin power: it MUST sit behind Cloudflare Access (or equivalent).`
+      : "[auth] WARNING: SQLITEND_AUTH=off — the control plane has no login (anyone with loopback access is admin)",
+  );
+}
 else if (!authService!.setupDone) console.warn("[auth] no admin password yet — run `sqlitend set-password` to enable the dashboard");
 
 const routes = createRoutes({
@@ -266,6 +272,7 @@ const routes = createRoutes({
   control,
   verify: verifier ? { service: verifier, results: verifications, maxAgeMs: config.backup!.verifyMaxAgeMs, startedAt: verifier.startedAt } : null,
   auth: authService ? { service: authService, repo: authRepo, cookieSecure: config.cookieSecure } : null,
+  auditRepo: authRepo,
   dns,
   config,
   workspaces,

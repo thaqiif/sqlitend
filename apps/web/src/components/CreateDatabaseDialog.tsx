@@ -51,7 +51,7 @@ export function CreateDatabaseDialog({ open, onClose, onSubmit }: Props) {
             disabled={busy}
           />
         </label>
-        <p className="hint">A URL-safe slug is auto-generated from the name.</p>
+        <p className="hint">Names are unique within a workspace. The public hostname uses a random ID, not the name.</p>
         {error && <p className="error" role="alert">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>
