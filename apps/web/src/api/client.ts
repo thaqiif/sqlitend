@@ -1,5 +1,6 @@
 import type {
   AuditEntry,
+  BackupStatus,
   SessionInfo,
   Connection,
   CreateDatabase,
@@ -149,6 +150,7 @@ export const api = {
   // -------------------------------------------------------------------------
   // Auth + audit
   // -------------------------------------------------------------------------
+  getBackup: (id: string) => request<BackupStatus>(`/databases/${encodeURIComponent(id)}/backup`),
   getSession: () => request<SessionInfo>("/auth/session"),
   login: (password: string, totp?: string) =>
     request<{ authenticated: true }>("/auth/login", {

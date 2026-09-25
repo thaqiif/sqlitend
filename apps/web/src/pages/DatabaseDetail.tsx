@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Connection, Database, Metrics, Token, TokenIssued } from "@sqlitend/shared";
+import type { BackupStatus, Connection, Database, Metrics, Token, TokenIssued } from "@sqlitend/shared";
 import { api } from "../api/client";
 import { MetricTiles } from "../components/MetricTiles";
 import { Modal } from "../components/Modal";
@@ -65,6 +65,7 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [tokens, setTokens] = useState<Token[]>([]);
+  const [backup, setBackup] = useState<BackupStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -106,8 +107,12 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
       .listTokens(databaseId)
       .then((t) => alive && setTokens(t))
       .catch(() => {}); // degrade: token table stays empty.
+    const loadBackup = () => api.getBackup(databaseId).then((b) => alive && setBackup(b)).catch(() => {});
+    void loadBackup();
+    const backupTimer = setInterval(loadBackup, 10_000);
     return () => {
       alive = false;
+      clearInterval(backupTimer);
     };
   }, [databaseId]);
 
@@ -334,6 +339,36 @@ export function DatabaseDetail({ databaseId, onBack }: Props) {
               ))}
             </tbody>
           </table>
+        )}
+      </section>
+
+      <section className="panel">
+        <h3 className="panel-title">Backup</h3>
+        {!backup ? (
+          <p className="muted">Loading…</p>
+        ) : !backup.enabled ? (
+          <p className="error-detail" role="alert">
+            Not backed up — configure SQLITEND_BACKUP_S3_* on the server.
+          </p>
+        ) : (
+          <div className="conn-list">
+            <p>
+              <span className={`scope-badge backup-${backup.state}`}>{backup.state}</span>{" "}
+              <span className="muted mono">{backup.replicaUrl}</span>
+            </p>
+            <p className="muted">
+              Last sync {backup.lastSyncAt ? fmtTime(backup.lastSyncAt) : "never"} · last snapshot{" "}
+              {backup.lastSnapshotAt ? fmtTime(backup.lastSnapshotAt) : "never"} · txid {backup.txidReplica ?? "—"} /{" "}
+              {backup.txidDb ?? "—"}
+              {backup.restarts > 0 ? ` · ${backup.restarts} restart(s)` : ""}
+            </p>
+            {backup.lastError && backup.state !== "ok" && (
+              <p className="error-detail" role="alert">
+                {backup.lastErrorAt ? `${fmtTime(backup.lastErrorAt)}: ` : ""}
+                {backup.lastError}
+              </p>
+            )}
+          </div>
         )}
       </section>
 

@@ -35,6 +35,8 @@ import { DnsManager } from "./dns/manager.ts";
 import { createSignatureVerifier } from "./auth/verify.ts";
 import { AuthService } from "./auth/session.ts";
 import { clientIp } from "./http/client-ip.ts";
+import { Replicator } from "./backup/replicator.ts";
+import { healthReport } from "./http/health.ts";
 
 export const VERSION = "0.1.0";
 
@@ -124,11 +126,22 @@ if (dns) {
   );
 }
 
+const replicator = config.backup
+  ? new Replicator({ config: config.backup, dataRoot: config.dataRoot, listDatabases: () => databases.list() })
+  : null;
+if (replicator) {
+  await replicator.start(); // sweeps orphans from a crashed previous run first
+  console.log(`[backup] continuous backup to s3://${config.backup!.bucket}/${config.backup!.prefix}/db/<id> (${config.backup!.endpoint})`);
+} else {
+  console.warn("[backup] WARNING: backups are not configured (SQLITEND_BACKUP_S3_*) — databases are not backed up");
+}
+
 const authService = config.authEnabled ? new AuthService(authRepo) : null;
 if (!config.authEnabled) console.warn("[auth] WARNING: SQLITEND_AUTH=off — the control plane has no login (loopback dev only)");
 else if (!authService!.setupDone) console.warn("[auth] no admin password yet — run `sqlitend set-password` to enable the dashboard");
 
 const routes = createRoutes({
+  backup: replicator,
   auth: authService ? { service: authService, repo: authRepo, cookieSecure: config.cookieSecure } : null,
   dns,
   config,
@@ -154,6 +167,14 @@ const server = Bun.serve({
   maxRequestBodySize: config.maxBodyBytes,
   fetch(req: Request, srv): Response | Promise<Response> {
     const url = new URL(req.url);
+    if (url.pathname === "/healthz" && (req.method === "GET" || req.method === "HEAD")) {
+      const report = healthReport({
+        databases: databases.list(),
+        backupState: replicator ? (id) => replicator.status(id).state : null,
+        sqldOk,
+      });
+      return Response.json(report, { status: report.status === "ok" ? 200 : 503, headers: { "cache-control": "no-store" } });
+    }
     if (url.pathname.startsWith("/api")) {
       // Host allowlist: the API answers only when addressed as this listener
       // (defeats DNS-rebinding, where the attacker's page reaches our socket
@@ -237,6 +258,7 @@ async function shutdown() {
   shuttingDown = true;
   console.log("[shutdown] stopping sqld processes (spawned + adopted)…");
   await supervisor.shutdown();
+  await replicator?.shutdown(); // after sqld: final WAL flush to the replica
   sampler.stop();
   server.stop(true);
   gatewayServer?.stop(true);

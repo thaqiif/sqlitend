@@ -753,3 +753,6 @@ code, pre {
 .audit-denied { color: var(--warn); }
 .audit-error { color: var(--danger); }
 .mono { font-family: ui-monospace, monospace; font-size: 0.8rem; }
+.backup-ok { color: var(--ok); }
+.backup-starting, .backup-lagging { color: var(--warn); }
+.backup-error, .backup-stopped, .backup-disabled { color: var(--danger); }

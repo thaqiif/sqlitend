@@ -187,3 +187,21 @@ export const AuditEntrySchema = z.object({
   detail: z.string().nullable(),
 });
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;
+
+// ---------------------------------------------------------------------------
+// Backups (Litestream → S3)
+// ---------------------------------------------------------------------------
+export const BackupStatusSchema = z.object({
+  enabled: z.boolean(),
+  state: z.enum(["disabled", "starting", "ok", "lagging", "error", "stopped"]),
+  replicaUrl: z.string().nullable(),
+  txidDb: z.string().nullable(),
+  txidReplica: z.string().nullable(),
+  lastSyncAt: z.number().int().nullable(),
+  lastSnapshotAt: z.number().int().nullable(),
+  behindSince: z.number().int().nullable(),
+  lastError: z.string().nullable(),
+  lastErrorAt: z.number().int().nullable(),
+  restarts: z.number().int(),
+});
+export type BackupStatus = z.infer<typeof BackupStatusSchema>;

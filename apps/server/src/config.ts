@@ -1,5 +1,6 @@
 import path from "node:path";
 import os from "node:os";
+import { accessSync, constants as fsConstants } from "node:fs";
 import { parseHostTemplate } from "./gateway/gateway.ts";
 
 // ---------------------------------------------------------------------------
@@ -8,6 +9,23 @@ import { parseHostTemplate } from "./gateway/gateway.ts";
 // (Validation is hand-rolled here — zod is used only for request bodies in
 // packages/shared.)
 // ---------------------------------------------------------------------------
+
+export interface BackupConfig {
+  endpoint: string;
+  bucket: string;
+  region: string;
+  forcePathStyle: boolean;
+  accessKeyId: string;
+  secretAccessKey: string;
+  /** Key prefix per server (e.g. "server-a"); replicas live at <prefix>/db/<database id>. */
+  prefix: string;
+  litestreamPath: string;
+  /** Litestream snapshot interval / retention, e.g. "24h", "168h". */
+  snapshotInterval: string;
+  retention: string;
+  /** Replica may trail the database this long before status turns "lagging", ms. */
+  maxLagMs: number;
+}
 
 export interface PortRange {
   start: number;
@@ -53,6 +71,8 @@ export interface Config {
   trustProxy: "off" | "cloudflare" | "xff";
   /** Session cookie Secure flag: "auto" = when the request is HTTPS; "on" = always. */
   cookieSecure: "auto" | "on";
+  /** Continuous S3 backup via Litestream; null when not configured. */
+  backup: BackupConfig | null;
   /** Cloudflare DNS automation; null when disabled. Requires the gateway. */
   cloudflareDns: { apiToken: string; zoneId: string; tunnelId: string; apiBase: string } | null;
 }
@@ -124,6 +144,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     cloudflareDns: loadCloudflareDnsConfig(env),
     authEnabled: loadAuthEnabled(env, host),
     trustProxy: oneOf("SQLITEND_TRUST_PROXY", env.SQLITEND_TRUST_PROXY, ["off", "cloudflare", "xff"] as const, "off"),
+    backup: loadBackupConfig(env),
     cookieSecure: oneOf("SQLITEND_COOKIE_SECURE", env.SQLITEND_COOKIE_SECURE, ["auto", "on"] as const, "auto"),
     ...overrides,
   };
@@ -175,4 +196,61 @@ function oneOf<T extends string>(name: string, raw: string | undefined, allowed:
   if (v === "") return fallback;
   if (!(allowed as readonly string[]).includes(v)) throw new Error(`invalid ${name}: "${raw}" (expected ${allowed.join("|")})`);
   return v as T;
+}
+
+const DURATION_RE = /^\d+(s|m|h)$/;
+
+function loadBackupConfig(env: NodeJS.ProcessEnv): BackupConfig | null {
+  const get = (k: string) => env[k]?.trim() || "";
+  const required = {
+    endpoint: get("SQLITEND_BACKUP_S3_ENDPOINT"),
+    bucket: get("SQLITEND_BACKUP_S3_BUCKET"),
+    accessKeyId: get("SQLITEND_BACKUP_S3_ACCESS_KEY_ID"),
+    secretAccessKey: get("SQLITEND_BACKUP_S3_SECRET_ACCESS_KEY"),
+  };
+  const set = Object.values(required).filter(Boolean).length;
+  if (set === 0) return null;
+  if (set !== 4) {
+    const missing = Object.entries(required).filter(([, v]) => !v).map(([k]) => k);
+    throw new Error(`backup is partially configured; missing: ${missing.join(", ")} (SQLITEND_BACKUP_S3_*)`);
+  }
+  let url: URL;
+  try {
+    url = new URL(required.endpoint);
+  } catch {
+    throw new Error(`invalid SQLITEND_BACKUP_S3_ENDPOINT: "${required.endpoint}" (expected https://…)`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("SQLITEND_BACKUP_S3_ENDPOINT must be http(s)");
+  if (url.protocol === "http:" && !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
+    console.warn(`[backup] WARNING: SQLITEND_BACKUP_S3_ENDPOINT uses plain http (${url.host}) — backups travel unencrypted`);
+  }
+  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(required.bucket)) {
+    throw new Error(`invalid SQLITEND_BACKUP_S3_BUCKET: "${required.bucket}" (3-63 chars: a-z 0-9 . -)`);
+  }
+  const prefix =
+    get("SQLITEND_BACKUP_PREFIX") ||
+    os.hostname().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 63).replace(/-+$/, "") ||
+    "sqlitend";
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(prefix)) throw new Error(`invalid SQLITEND_BACKUP_PREFIX: "${prefix}" (a-z 0-9 -)`);
+  const snapshotInterval = get("SQLITEND_BACKUP_SNAPSHOT_INTERVAL") || "24h";
+  const retention = get("SQLITEND_BACKUP_RETENTION") || "168h";
+  for (const [k, v] of [["SQLITEND_BACKUP_SNAPSHOT_INTERVAL", snapshotInterval], ["SQLITEND_BACKUP_RETENTION", retention]]) {
+    if (!DURATION_RE.test(v!)) throw new Error(`invalid ${k}: "${v}" (e.g. 24h, 30m)`);
+  }
+  const litestreamPath = get("SQLITEND_LITESTREAM_PATH") || path.join(repoRoot, "bin", "litestream");
+  try {
+    accessSync(litestreamPath, fsConstants.X_OK);
+  } catch {
+    throw new Error(`litestream not executable at ${litestreamPath} — run scripts/fetch-litestream.sh or set SQLITEND_LITESTREAM_PATH`);
+  }
+  return {
+    ...required,
+    region: get("SQLITEND_BACKUP_S3_REGION") || "auto",
+    forcePathStyle: (get("SQLITEND_BACKUP_S3_FORCE_PATH_STYLE") || "true").toLowerCase() !== "false",
+    prefix,
+    litestreamPath,
+    snapshotInterval,
+    retention,
+    maxLagMs: parsePositiveInt("SQLITEND_BACKUP_MAX_LAG_SECONDS", env.SQLITEND_BACKUP_MAX_LAG_SECONDS, 300, 10, 86_400) * 1000,
+  };
 }

@@ -29,6 +29,8 @@ import { PortExhaustedError } from "../supervisor/ports.ts";
 import { mintToken, dbKeyRelPath } from "../auth/tokens.ts";
 import { assertInside } from "../util/paths.ts";
 import type { DnsManager } from "../dns/manager.ts";
+import type { Replicator } from "../backup/replicator.ts";
+import type { BackupStatus } from "@sqlitend/shared";
 import { installAuth, type AppEnv, type AuthDeps } from "./auth-routes.ts";
 import { maxSlugLength, parseHostTemplate, publicKeyFor, renderHost } from "../gateway/gateway.ts";
 
@@ -136,6 +138,8 @@ export interface RoutesDeps {
   version: string;
   /** Cloudflare DNS automation; absent when disabled. */
   dns?: DnsManager | null;
+  /** Continuous S3 backup; absent when not configured. */
+  backup?: Replicator | null;
   /** Control-plane login; absent only with SQLITEND_AUTH=off (loopback dev). */
   auth?: AuthDeps | null;
 }
@@ -311,6 +315,9 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     // and covers ADOPTED processes — the process MUST be dead before the data
     // dir is removed, or we rm -rf a database that is being written.
     await d.supervisor.killByDbId(row.id);
+    // Flush + stop replication before the files go. The replica itself is kept
+    // in S3 (retention applies), so a deleted database stays recoverable.
+    await d.backup?.stop(row.id, { removeConfig: true });
     assertInside(d.config.dataRoot, row.data_dir);
     await rm(row.data_dir, { recursive: true, force: true });
     // Remove now-empty parent directories (workspaces/<ws>/dbs, then the
@@ -358,6 +365,22 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     };
     return c.json(conn);
   });
+
+  // ---- backups ------------------------------------------------------------
+  const backupStatus = (id: string): BackupStatus => {
+    if (!d.backup) {
+      return { enabled: false, state: "disabled", replicaUrl: null, txidDb: null, txidReplica: null, lastSyncAt: null,
+        lastSnapshotAt: null, behindSince: null, lastError: null, lastErrorAt: null, restarts: 0 };
+    }
+    const { pid: _pid, ...s } = d.backup.status(id);
+    return { enabled: true, ...s };
+  };
+
+  app.get("/api/databases/:id/backup", (c) => c.json(backupStatus(requireDb(c.req.param("id")).id)));
+
+  app.get("/api/backups", (c) =>
+    c.json(d.databases.list().map((r) => ({ databaseId: r.id, slug: r.slug, ...backupStatus(r.id) }))),
+  );
 
   // ---- dns ----------------------------------------------------------------
   app.post("/api/databases/:id/dns/sync", async (c) => {

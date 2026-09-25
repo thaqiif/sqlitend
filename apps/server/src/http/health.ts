@@ -1,0 +1,40 @@
+// ---------------------------------------------------------------------------
+// GET /healthz — unauthenticated probe for an uptime monitor. Counts only (no
+// database names, no errors) so it is safe to expose. 200 = healthy, 503 =
+// degraded. "Not backed up" is degraded on purpose: silence must not look OK.
+// ---------------------------------------------------------------------------
+
+import type { ReplicaState } from "../backup/replicator.ts";
+
+export interface HealthInput {
+  databases: { id: string; status: string; auto_start: number }[];
+  backupState: ((id: string) => ReplicaState) | null;
+  sqldOk: boolean;
+}
+
+export interface HealthReport {
+  status: "ok" | "degraded";
+  sqld: { ok: boolean; running: number; expected: number };
+  backup: { enabled: boolean; ok: number; failing: number };
+}
+
+export function healthReport(h: HealthInput): HealthReport {
+  const expected = h.databases.filter((d) => d.auto_start === 1 || d.status === "running");
+  const running = expected.filter((d) => d.status === "running");
+  let ok = 0;
+  let failing = 0;
+  if (h.backupState) {
+    for (const d of running) {
+      const s = h.backupState(d.id);
+      if (s === "ok") ok++;
+      // "starting" is a grace state right after launch, not a failure.
+      else if (s !== "starting") failing++;
+    }
+  }
+  const healthy = h.sqldOk && running.length === expected.length && !!h.backupState && failing === 0;
+  return {
+    status: healthy ? "ok" : "degraded",
+    sqld: { ok: h.sqldOk, running: running.length, expected: expected.length },
+    backup: { enabled: !!h.backupState, ok, failing },
+  };
+}

@@ -3,5 +3,6 @@ dist/
 *.log
 .env
 bin/sqld
+bin/litestream
 data/
 .omc/
