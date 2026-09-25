@@ -74,9 +74,11 @@ function htmlFallback(dist: string): Response {
  * reaches our listener) needs a hostname, and an IP-literal Host has no DNS to
  * rebound.
  */
-export function isAllowedHost(host: string, port: number, listenHost: string): boolean {
+export function isAllowedHost(host: string, port: number, listenHost: string, extra: readonly string[] = []): boolean {
   const hostname = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
   if (hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1") return true;
+  // Operator-named hostnames (SQLITEND_DASHBOARD_HOSTS), exact match only.
+  if (extra.includes(hostname)) return true;
   if (listenHost === "0.0.0.0" || listenHost === "::" || listenHost === "*") {
     return hostname === listenHost.toLowerCase() || isIpLiteral(hostname);
   }

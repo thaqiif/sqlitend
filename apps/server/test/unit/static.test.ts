@@ -75,6 +75,15 @@ describe("isAllowedHost (DNS-rebinding guard)", () => {
     expect(isAllowedHost("evil.example:6100", 6100, "sqlitend.test")).toBe(false);
   });
 
+  test("SQLITEND_DASHBOARD_HOSTS: exact names pass (any port, any case); others and look-alikes don't", () => {
+    const extra = ["sqlitend-staging.cloudsby.me"];
+    expect(isAllowedHost("sqlitend-staging.cloudsby.me", 6100, "127.0.0.1", extra)).toBe(true);
+    expect(isAllowedHost("SQLITEND-staging.cloudsby.me:443", 6100, "127.0.0.1", extra)).toBe(true);
+    expect(isAllowedHost("evil.sqlitend-staging.cloudsby.me", 6100, "127.0.0.1", extra)).toBe(false);
+    expect(isAllowedHost("sqlitend-staging.cloudsby.me.evil.example", 6100, "127.0.0.1", extra)).toBe(false);
+    expect(isAllowedHost("evil.example", 6100, "127.0.0.1", extra)).toBe(false);
+  });
+
   test("the configured bind hostname is allowed as itself", () => {
     expect(isAllowedHost("sqlitend.test:6100", 6100, "sqlitend.test")).toBe(true);
   });
@@ -83,5 +92,19 @@ describe("isAllowedHost (DNS-rebinding guard)", () => {
     expect(isAllowedHost("999.1.1.1:6100", 6100, "0.0.0.0")).toBe(false);
     expect(isAllowedHost("1.2.3:6100", 6100, "0.0.0.0")).toBe(false);
     expect(isAllowedHost("not-an-ip:6100", 6100, "0.0.0.0")).toBe(false);
+  });
+});
+
+describe("parseHostList", () => {
+  test("parses, trims, lowercases; empty → []", async () => {
+    const { parseHostList } = await import("../../src/config.ts");
+    expect(parseHostList("X", undefined)).toEqual([]);
+    expect(parseHostList("X", " A.example.com , b.example.com ")).toEqual(["a.example.com", "b.example.com"]);
+  });
+  test("rejects wildcards, ports, schemes, single labels", async () => {
+    const { parseHostList } = await import("../../src/config.ts");
+    for (const bad of ["*.example.com", "a.example.com:443", "https://a.example.com", "localhost", "a..b.com"]) {
+      expect(() => parseHostList("X", bad)).toThrow();
+    }
   });
 });

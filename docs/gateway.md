@@ -118,6 +118,20 @@ WebSocket upgrades with 501.
   Old expiries drop off the list, so the alert doesn't fire forever. Poll it from cron
   and alert when it returns anything. The UI marks these tokens *expires soon*.
 
+## Reaching the dashboard through the tunnel
+
+The control plane (`127.0.0.1:6100`) protects its API against DNS rebinding. It only answers requests
+addressed as `localhost`, `127.0.0.1` or its bind address, and anything else gets `403 Forbidden`. To open
+the dashboard under a hostname, **name it**, and put it behind Cloudflare Access. The dashboard has
+admin power, so never publish it without Access.
+
+```sh
+SQLITEND_DASHBOARD_HOSTS=sqlitend.example.com   # comma-separated, exact names only (no wildcards)
+SQLITEND_COOKIE_SECURE=on                        # TLS terminates at Cloudflare
+```
+Tunnel ingress: `sqlitend.example.com → http://127.0.0.1:6100`. Add an Access app for that hostname with
+an allow policy on your email.
+
 ## Behaviour and security notes
 
 - **Two checks on every request.** The gateway lets a token through only if sqlitend issued it
