@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { Database, Metrics, Workspace } from "@sqlitend/shared";
+import type { BackupStatus, Database, Metrics, Workspace } from "@sqlitend/shared";
 import { api } from "../api/client";
+import { shortSqldVersion } from "../format";
 import { CreateDatabaseDialog } from "../components/CreateDatabaseDialog";
 import { CreateWorkspaceDialog } from "../components/CreateWorkspaceDialog";
 import { Modal } from "../components/Modal";
@@ -17,6 +18,8 @@ interface Props {
   onDeleteWorkspace: (id: string) => Promise<void>;
   /** Host advertised in connection URLs (from /api/system); loopback fallback. */
   publicHost?: string;
+  /** Databases were created/deleted (header counts refresh right away). */
+  onChanged?: () => void;
 }
 
 type PendingDelete =
@@ -45,9 +48,25 @@ export function DatabasesPage({
   onCreateWorkspace,
   onDeleteWorkspace,
   publicHost = "127.0.0.1",
+  onChanged,
 }: Props) {
   const [databases, setDatabases] = useState<Database[]>([]);
   const [metrics, setMetrics] = useState<Record<string, Metrics>>({});
+  const [backups, setBackups] = useState<Record<string, BackupStatus>>({});
+  // One global call for every card's backup + restore-verify state.
+  const loadBackups = useCallback(
+    () =>
+      api
+        .listBackups()
+        .then((rows) => setBackups(Object.fromEntries(rows.map((r) => [r.databaseId, r]))))
+        .catch(() => {}),
+    [],
+  );
+  useEffect(() => {
+    void loadBackups();
+    const t = setInterval(loadBackups, 15_000);
+    return () => clearInterval(t);
+  }, [loadBackups]);
   const [listError, setListError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -132,12 +151,15 @@ export function DatabasesPage({
   async function handleCreateDatabase(name: string) {
     if (!selectedWorkspaceId) throw new Error("Select a workspace first");
     await api.createDatabase(selectedWorkspaceId, { name });
+    onChanged?.();
+    void loadBackups();
     await load(true);
   }
 
   async function handleDeleteDatabase(id: string) {
     await api.deleteDatabase(id);
     setPendingDelete(null);
+    onChanged?.();
     try {
       await load(true);
     } catch (err) {
@@ -269,15 +291,21 @@ export function DatabasesPage({
                     >
                       <span className="db-card-title">
                         <h3>{db.name}</h3>
-                        <span className="db-slug">{db.slug}</span>
+                        {db.slug !== db.name && <span className="db-slug">{db.slug}</span>}
                       </span>
                     </button>
                     <span className={`status-badge status-${db.status}`}>{db.status}</span>
                   </header>
                   <div className="db-meta">
-                    <span>{dbHost(db) ?? "no port"}</span>
-                    <span>{db.sqldVersion ? `sqld ${db.sqldVersion}` : "—"}</span>
+                    <span className="db-endpoint mono" title={db.publicUrl ?? dbHost(db) ?? undefined}>
+                      {db.publicUrl ? db.publicUrl.replace(/^https:\/\//, "") : (dbHost(db) ?? "no port")}
+                    </span>
+                    {(() => {
+                      const v = shortSqldVersion(db.sqldVersion);
+                      return v ? <span className="muted">sqld {v}</span> : null;
+                    })()}
                   </div>
+                  <BackupBadges b={backups[db.id]} />
                   <div className="db-card-metrics">
                     <MiniMetric
                       label="CPU"
@@ -327,6 +355,25 @@ export function DatabasesPage({
         onConfirm={handleConfirmDelete}
       />
     </div>
+  );
+}
+
+/** Backup + restore-verify state at a glance (hidden while loading). */
+function BackupBadges({ b }: { b: BackupStatus | undefined }) {
+  if (!b) return null;
+  if (!b.enabled) return <p className="db-badges"><span className="scope-badge backup-disabled">not backed up</span></p>;
+  const v = b.verify?.health;
+  return (
+    <p className="db-badges">
+      <span className={`scope-badge backup-${b.state}`} title={b.lastError ?? undefined}>
+        backup {b.state}
+      </span>
+      {v && (
+        <span className={`scope-badge verify-${v}`} title={b.verify?.lastDetail ?? undefined}>
+          verify {v}
+        </span>
+      )}
+    </p>
   );
 }
 

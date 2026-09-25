@@ -27,7 +27,7 @@ const cfg = (over: Partial<BackupConfig> = {}): BackupConfig => ({
   retention: "168h",
   maxLagMs: 60_000,
   verifyAt: null,
-  verifyMaxAgeMs: 48 * 3_600_000,
+  verifyMaxAgeMs: 48 * 3_600_000, control: null,
   ...over,
 });
 
@@ -251,6 +251,7 @@ describe("healthz", () => {
       sqld: { ok: true, running: 2, expected: 2 },
       backup: { enabled: true, ok: 1, failing: 1 },
       verify: { enabled: false, ok: 0, failing: 0 },
+      control: null,
     });
     expect(healthReport({ databases: dbs, backupState: null, sqldOk: true }).status).toBe("degraded");
     expect(healthReport({ databases: [...dbs, { id: "c", status: "crashed", auto_start: 1 }], backupState: () => "ok", sqldOk: true }).status).toBe("degraded");
@@ -263,6 +264,13 @@ describe("healthz", () => {
     expect(healthReport({ ...base, verifyState: () => "pending" }).status).toBe("ok");
     expect(healthReport({ ...base, verifyState: (id) => (id === "a" ? "failed" : "ok") }).verify).toEqual({ enabled: true, ok: 1, failing: 1 });
     expect(healthReport({ ...base, verifyState: () => "stale" }).status).toBe("degraded");
+  });
+
+  test("control-plane backup: disabled, failed or stale degrade; ok and pending do not", () => {
+    const base = { databases: dbs, backupState: () => "ok" as const, sqldOk: true };
+    for (const [c, status] of [["ok", "ok"], ["pending", "ok"], ["disabled", "degraded"], ["failed", "degraded"], ["stale", "degraded"]] as const) {
+      expect(healthReport({ ...base, controlState: c }).status).toBe(status);
+    }
   });
 });
 

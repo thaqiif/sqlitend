@@ -1,6 +1,7 @@
 import type {
   AuditEntry,
   BackupStatus,
+  ControlBackupStatus,
   ReplicaInfo,
   RestoreRequest,
   SessionInfo,
@@ -152,6 +153,9 @@ export const api = {
   // -------------------------------------------------------------------------
   // Auth + audit
   // -------------------------------------------------------------------------
+  getControlBackup: () => request<ControlBackupStatus>("/backups/control"),
+  runControlBackup: () => request<ControlBackupStatus>("/backups/control", { method: "POST" }),
+  listBackups: () => request<(BackupStatus & { databaseId: string; slug: string })[]>("/backups"),
   listReplicas: () => request<ReplicaInfo[]>("/backups/replicas"),
   restoreBackup: (sourceId: string, body: RestoreRequest) =>
     request<Database>(`/backups/${encodeURIComponent(sourceId)}/restore`, { method: "POST", body: JSON.stringify(body) }),

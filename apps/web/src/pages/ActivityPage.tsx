@@ -38,6 +38,7 @@ export function ActivityPage({ onBack }: { onBack: () => void }) {
         {rows.length === 0 ? (
           <p className="muted">No activity yet.</p>
         ) : (
+          <div className="table-scroll">
           <table className="token-table">
             <thead>
               <tr>
@@ -67,6 +68,7 @@ export function ActivityPage({ onBack }: { onBack: () => void }) {
               ))}
             </tbody>
           </table>
+          </div>
         )}
         {!done && rows.length > 0 && (
           <button type="button" className="btn ghost small" onClick={() => void load(rows.at(-1)!.id)}>

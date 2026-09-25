@@ -11,6 +11,8 @@ export interface HealthInput {
   backupState: ((id: string) => ReplicaState) | null;
   /** Restore-verify health per database; null when verification is off. */
   verifyState?: ((id: string) => "ok" | "failed" | "stale" | "pending") | null;
+  /** Control-plane backup health; null when not applicable (no backups at all). */
+  controlState?: "ok" | "failed" | "stale" | "pending" | "disabled" | null;
   sqldOk: boolean;
 }
 
@@ -19,6 +21,7 @@ export interface HealthReport {
   sqld: { ok: boolean; running: number; expected: number };
   backup: { enabled: boolean; ok: number; failing: number };
   verify: { enabled: boolean; ok: number; failing: number };
+  control: "ok" | "failed" | "stale" | "pending" | "disabled" | null;
 }
 
 export function healthReport(h: HealthInput): HealthReport {
@@ -44,11 +47,16 @@ export function healthReport(h: HealthInput): HealthReport {
       else if (v !== "pending") vFailing++;
     }
   }
-  const healthy = h.sqldOk && running.length === expected.length && !!h.backupState && failing === 0 && vFailing === 0;
+  const control = h.controlState ?? null;
+  // Without the control plane, restored databases are unusable (keys, token
+  // allowlist): "disabled" is as unhealthy as "failed" once backups exist.
+  const controlBad = control === "failed" || control === "stale" || control === "disabled";
+  const healthy = h.sqldOk && running.length === expected.length && !!h.backupState && failing === 0 && vFailing === 0 && !controlBad;
   return {
     status: healthy ? "ok" : "degraded",
     sqld: { ok: h.sqldOk, running: running.length, expected: expected.length },
     backup: { enabled: !!h.backupState, ok, failing },
     verify: { enabled: !!h.verifyState, ok: vOk, failing: vFailing },
+    control,
   };
 }

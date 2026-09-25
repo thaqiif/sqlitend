@@ -15,7 +15,7 @@ import { loadConfig, type BackupConfig } from "../../src/config.ts";
 const cfg: BackupConfig = {
   endpoint: "https://s3.example.com", bucket: "sqlitend-backups", region: "auto", forcePathStyle: true, accessKeyId: "k",
   secretAccessKey: "s", prefix: "server-a", litestreamPath: "/x", snapshotInterval: "24h", retention: "168h", maxLagMs: 60_000,
-  verifyAt: "03:30", verifyMaxAgeMs: 48 * 3_600_000,
+  verifyAt: "03:30", verifyMaxAgeMs: 48 * 3_600_000, control: null,
 };
 
 function makeDb(file: string, schema: string[], rows = 10) {

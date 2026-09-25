@@ -35,9 +35,11 @@ import { DnsManager } from "./dns/manager.ts";
 import { createSignatureVerifier } from "./auth/verify.ts";
 import { AuthService } from "./auth/session.ts";
 import { clientIp } from "./http/client-ip.ts";
+import { removePidFile, writePidFile } from "./util/pidfile.ts";
 import { Replicator } from "./backup/replicator.ts";
 import { RestoreService, realRunLitestream, s3ClientFor } from "./backup/restore.ts";
-import { VerifyService, verifyHealth } from "./backup/verify.ts";
+import { VerifyService, nextRunAt, verifyHealth } from "./backup/verify.ts";
+import { ControlBackupService, parseBackupKey, snapshotControlPlane } from "./backup/control.ts";
 import { VerificationsRepo } from "./db/repos/verifications.ts";
 import { healthReport } from "./http/health.ts";
 
@@ -171,6 +173,44 @@ if (verifier) {
   if (config.backup!.verifyAt) verifier.start();
   else console.warn("[verify] WARNING: scheduled restore-verify is off (SQLITEND_BACKUP_VERIFY_AT=off)");
 }
+// ---- encrypted control-plane backup -----------------------------------------
+const control = config.backup?.control
+  ? new ControlBackupService({
+      s3: s3ClientFor(config.backup) as never,
+      key: parseBackupKey(config.backup.control.key),
+      prefix: config.backup.prefix,
+      keep: config.backup.control.keep,
+      snapshot: () => snapshotControlPlane(config.dataRoot, metadata.db, VERSION),
+    })
+  : null;
+const controlStartedAt = Date.now();
+if (control) {
+  await control.loadLatest();
+  // Anything that changes what a rebuild needs → back up within a minute.
+  const RELEVANT = /^(workspace|database|token|auth\.(set_password|enable_totp|disable_totp))\./;
+  authRepo.onAudit = (e) => {
+    if (e.outcome === "ok" && RELEVANT.test(e.action)) control.trigger();
+  };
+  const scheduleControl = () => {
+    const at = nextRunAt(config.backup!.control!.at, new Date());
+    setTimeout(() => void control.runNow().catch(() => {}).finally(scheduleControl), at.getTime() - Date.now());
+  };
+  scheduleControl();
+  if (!control.status().lastOkAt) void control.runNow().catch(() => {}); // first backup right away
+  console.log(`[control-backup] encrypted control-plane backups to s3://${config.backup!.bucket}/${config.backup!.prefix}/control/`);
+} else if (config.backup) {
+  console.warn("[control-backup] WARNING: SQLITEND_CONTROL_BACKUP_KEY not set — metadata and signing keys are NOT backed up; a server loss makes restored databases unusable");
+}
+const controlState = (): "ok" | "failed" | "stale" | "pending" | "disabled" | null => {
+  if (!config.backup) return null;
+  if (!control) return "disabled";
+  const st = control.status();
+  if (st.lastErrorAt && (!st.lastOkAt || st.lastErrorAt > st.lastOkAt)) return "failed";
+  const maxAge = config.backup.control!.maxAgeMs;
+  if (st.lastOkAt && Date.now() - st.lastOkAt <= maxAge) return "ok";
+  return Date.now() - controlStartedAt <= 10 * 60_000 ? "pending" : "stale";
+};
+
 const verifyStateOf = (id: string) => {
   const row = databases.getById(id);
   const graceFrom = Math.max(row?.created_at ?? 0, verifier!.startedAt);
@@ -202,6 +242,7 @@ else if (!authService!.setupDone) console.warn("[auth] no admin password yet —
 const routes = createRoutes({
   backup: replicator,
   restore,
+  control,
   verify: verifier ? { service: verifier, results: verifications, maxAgeMs: config.backup!.verifyMaxAgeMs, startedAt: verifier.startedAt } : null,
   auth: authService ? { service: authService, repo: authRepo, cookieSecure: config.cookieSecure } : null,
   dns,
@@ -233,6 +274,7 @@ const server = Bun.serve({
         databases: databases.list(),
         backupState: replicator ? (id) => replicator.status(id).state : null,
         verifyState: verifier && config.backup!.verifyAt ? verifyStateOf : null,
+        controlState: controlState(),
         sqldOk,
       });
       return Response.json(report, { status: report.status === "ok" ? 200 : 503, headers: { "cache-control": "no-store" } });
@@ -279,6 +321,8 @@ function rateLimited(): boolean {
 }
 
 console.log(`sqlitend ${VERSION} listening on http://${config.host}:${server.port}`);
+// The offline rebuild CLI refuses to run while this process is alive.
+writePidFile(config.dataRoot);
 
 // ---------------------------------------------------------------------------
 // Gateway (optional): host-routed public front for all databases
@@ -319,6 +363,7 @@ async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log("[shutdown] stopping sqld processes (spawned + adopted)…");
+  control?.stop();
   verifier?.stop(); // before sqld: no new verify reads a live file that is going away
   await supervisor.shutdown();
   await replicator?.shutdown(); // after sqld: final WAL flush to the replica
@@ -326,6 +371,7 @@ async function shutdown() {
   server.stop(true);
   gatewayServer?.stop(true);
   metadata.db.close();
+  removePidFile(config.dataRoot);
   console.log("[shutdown] complete");
   process.exit(0);
 }

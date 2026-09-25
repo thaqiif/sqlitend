@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ReplicaInfo, Workspace } from "@sqlitend/shared";
+import type { ControlBackupStatus, ReplicaInfo, Workspace } from "@sqlitend/shared";
 import { api } from "../api/client";
 import { RestoreDialog } from "../components/RestoreDialog";
 
@@ -16,6 +16,23 @@ export function BackupsPage({
   const [rows, setRows] = useState<ReplicaInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<ReplicaInfo | null>(null);
+  const [control, setControl] = useState<ControlBackupStatus | null>(null);
+  const [controlBusy, setControlBusy] = useState(false);
+
+  useEffect(() => {
+    api.getControlBackup().then(setControl).catch(() => {});
+  }, []);
+
+  async function backupControlNow() {
+    setControlBusy(true);
+    try {
+      setControl(await api.runControlBackup());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Control-plane backup failed");
+    } finally {
+      setControlBusy(false);
+    }
+  }
 
   useEffect(() => {
     api
@@ -34,11 +51,36 @@ export function BackupsPage({
       </div>
       {error && <p className="error" role="alert">{error}</p>}
       <section className="panel">
+        <div className="panel-header">
+          <h3 className="panel-title">Control plane (metadata + signing keys, encrypted)</h3>
+          {control?.enabled && (
+            <button type="button" className="btn ghost small" onClick={() => void backupControlNow()} disabled={controlBusy}>
+              {controlBusy ? "Backing up…" : "Back up now"}
+            </button>
+          )}
+        </div>
+        {!control ? (
+          <p className="muted">Loading…</p>
+        ) : !control.enabled ? (
+          <p className="error-detail" role="alert">
+            Not backed up. Set SQLITEND_CONTROL_BACKUP_KEY (<code>sqlitend gen-backup-key</code>, keep a copy offline).
+            Without it, restored databases can't be used after a server loss.
+          </p>
+        ) : (
+          <p className={control.lastError ? "error-detail" : "muted"}>
+            Last backup {control.lastOkAt ? new Date(control.lastOkAt).toLocaleString() : "never"}
+            {control.lastKey ? <span className="mono"> · {control.lastKey.split("/").pop()}</span> : null}
+            {control.lastError ? ` · last attempt failed: ${control.lastError}` : ""}
+          </p>
+        )}
+      </section>
+      <section className="panel">
         {!rows ? (
           <p className="muted">Loading…</p>
         ) : rows.length === 0 ? (
           <p className="muted">No backups in the store yet.</p>
         ) : (
+          <div className="table-scroll">
           <table className="token-table">
             <thead>
               <tr>
@@ -65,6 +107,7 @@ export function BackupsPage({
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </section>
       {restoring && (

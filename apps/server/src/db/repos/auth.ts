@@ -34,6 +34,9 @@ export interface AuditRow {
 export type AuditInput = Omit<AuditRow, "id" | "at"> & { at?: number };
 
 export class AuthRepo {
+  /** Observer for every audited event (the control-plane backup listens). */
+  onAudit: ((e: AuditInput) => void) | null = null;
+
   constructor(private readonly db: Database) {}
 
   // ---- admin --------------------------------------------------------------
@@ -102,6 +105,11 @@ export class AuthRepo {
     this.db
       .query("INSERT INTO audit_log(at, actor, ip, action, target, outcome, detail) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(e.at ?? Date.now(), e.actor, e.ip, e.action, e.target, e.outcome, e.detail);
+    try {
+      this.onAudit?.(e);
+    } catch {
+      /* observers never break auditing */
+    }
   }
 
   /** Newest first; `beforeId` pages backwards. */

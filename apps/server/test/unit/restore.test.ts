@@ -19,7 +19,7 @@ import type { Sampler } from "../../src/metrics/sampler.ts";
 const cfg: BackupConfig = {
   endpoint: "https://s3.example.com", bucket: "sqlitend-backups", region: "auto", forcePathStyle: true,
   accessKeyId: "k", secretAccessKey: "s", prefix: "server-a", litestreamPath: "/x", snapshotInterval: "24h",
-  retention: "168h", maxLagMs: 60_000, verifyAt: null, verifyMaxAgeMs: 48 * 3_600_000,
+  retention: "168h", maxLagMs: 60_000, verifyAt: null, verifyMaxAgeMs: 48 * 3_600_000, control: null,
 };
 
 /** In-memory S3 with prefix/delimiter listing (preloaded with replica data for the test source). */

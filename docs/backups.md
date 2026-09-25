@@ -146,6 +146,54 @@ nightly run, and doesn't alarm.
 A migration applied seconds before a verify can show up as a schema mismatch while the replica
 catches up; the next run clears it. Use **Verify now** to confirm.
 
+## Control-plane backup (rebuilding a whole server)
+
+Litestream protects database **contents**. Rebuilding a lost server also needs sqlitend's own
+state:
+
+- `metadata.sqlite`: workspaces, databases (id ↔ replica path), the **token allowlist** the gateway
+  enforces, the admin login, and the audit log;
+- `keys/`: each database's **signing key**. Without it, every issued token is invalid.
+
+This state is backed up **encrypted** (AES-256-GCM) to `s3://<bucket>/<prefix>/control/`. That
+happens daily at `SQLITEND_CONTROL_BACKUP_AT` (default `03:15`), about 60 s after any change a
+rebuild depends on (a database, token or workspace change, or a password/TOTP change), at first
+boot, and on demand. The last `SQLITEND_CONTROL_BACKUP_KEEP` (30) copies are kept.
+
+```sh
+sqlitend gen-backup-key        # prints a 32-byte key + fingerprint
+# → SQLITEND_CONTROL_BACKUP_KEY=… in ~/.config/sqlitend/env, AND a copy in your password manager
+```
+
+**The key never goes to S3.** Someone with read access to the bucket still can't mint tokens or
+read the admin hash. Lose the key and control backups can't be decrypted, so keep it offline.
+Without a key set, the boot log warns and `/healthz` reports `degraded` (`"control":"disabled"`).
+
+### Full-server rebuild (drill-tested)
+
+On a fresh server with sqlitend installed, the same `SQLITEND_BACKUP_*` and
+`SQLITEND_CONTROL_BACKUP_KEY` settings, and **sqlitend stopped**:
+
+```sh
+sqlitend restore-control          # latest; or --list / --object <key>; --force moves an existing metadata aside
+sqlitend restore-data             # restores every database's data in place, verified with integrity_check
+systemctl --user start sqlitend   # databases relaunch; existing tokens keep working
+```
+
+- `restore-control` decrypts the bundle (a wrong key is named by its fingerprint) and writes the
+  metadata and keys. If the new data root differs from the old one, it remaps the database paths.
+  It then **parks** every database (`stopped`, `auto_start=0`, "restore pending"): starting one
+  before its data is back would bring it up empty and replicate the emptiness. Start is refused for
+  parked databases.
+- `restore-data` restores each parked database into its own path, never over an existing file, then
+  re-enables auto-start. A database that fails stays parked; fix the cause and run it again.
+- Both commands refuse to run while sqlitend is up.
+- Replication then continues into the **same** replica paths (same database ids).
+
+Drill result: the whole data root was wiped. `restore-control`, then `restore-data`, then start:
+both databases came back with every row, and **tokens issued before the wipe** still worked through
+the public gateway.
+
 ### Manual restore without sqlitend (disaster recovery)
 
 ```sh

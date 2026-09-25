@@ -46,6 +46,7 @@ const ACTIONS: Record<string, string> = {
   "POST /api/backups/:id/restore": "database.restore",
   "POST /api/databases/:id/backup/verify": "backup.verify",
   "POST /api/backups/verify": "backup.verify_all",
+  "POST /api/backups/control": "backup.control",
   "POST /api/databases/:id/tokens": "token.create",
   "DELETE /api/databases/:id/tokens/:jti": "token.revoke",
   "POST /api/auth/logout": "auth.logout",
