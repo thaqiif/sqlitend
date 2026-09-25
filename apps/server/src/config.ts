@@ -77,6 +77,9 @@ export interface Config {
   trustProxy: "off" | "cloudflare" | "xff";
   /** Session cookie Secure flag: "auto" = when the request is HTTPS; "on" = always. */
   cookieSecure: "auto" | "on";
+  /** Extra hostnames the control-plane API answers to (SQLITEND_DASHBOARD_HOSTS),
+   *  e.g. a tunnel hostname behind Cloudflare Access. Lowercase, no port. */
+  dashboardHosts: string[];
   /** Continuous S3 backup via Litestream; null when not configured. */
   backup: BackupConfig | null;
   /** Cloudflare DNS automation; null when disabled. Requires the gateway. */
@@ -152,6 +155,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     trustProxy: oneOf("SQLITEND_TRUST_PROXY", env.SQLITEND_TRUST_PROXY, ["off", "cloudflare", "xff"] as const, "off"),
     backup: loadBackupConfig(env),
     cookieSecure: oneOf("SQLITEND_COOKIE_SECURE", env.SQLITEND_COOKIE_SECURE, ["auto", "on"] as const, "auto"),
+    dashboardHosts: parseHostList("SQLITEND_DASHBOARD_HOSTS", env.SQLITEND_DASHBOARD_HOSTS),
     ...overrides,
   };
 }
@@ -285,4 +289,15 @@ function loadControlBackup(env: NodeJS.ProcessEnv, get: (k: string) => string): 
     keep: parsePositiveInt("SQLITEND_CONTROL_BACKUP_KEEP", env.SQLITEND_CONTROL_BACKUP_KEEP, 30, 1, 1000),
     maxAgeMs: 48 * 3_600_000,
   };
+}
+
+/** Comma-separated DNS hostnames (no scheme, port, path or wildcard). */
+export function parseHostList(name: string, raw: string | undefined): string[] {
+  if (!raw || raw.trim() === "") return [];
+  return raw.split(",").map((h) => h.trim().toLowerCase()).filter(Boolean).map((h) => {
+    if (!/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(h)) {
+      throw new Error(`${name}: "${h}" is not a plain hostname (e.g. sqlitend.example.com)`);
+    }
+    return h;
+  });
 }

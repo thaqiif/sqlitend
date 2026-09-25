@@ -44,7 +44,7 @@ import { ControlBackupService, parseBackupKey, snapshotControlPlane } from "./ba
 import { VerificationsRepo } from "./db/repos/verifications.ts";
 import { healthReport } from "./http/health.ts";
 
-export const VERSION = "0.1.1";
+export const VERSION = "0.1.2";
 
 // ---------------------------------------------------------------------------
 // Config + persistence (fail loudly and actionably on fs problems)
@@ -129,6 +129,13 @@ if (dns) {
   void dns.reconcileAll().then(
     (r) => console.log(`[dns] boot reconcile: ${r.synced} synced, ${r.failed} failed`),
     (err) => console.warn(`[dns] boot reconcile failed: ${(err as Error).message}`),
+  );
+}
+
+if (config.dashboardHosts.length > 0 && config.cookieSecure !== "on") {
+  console.warn(
+    `[auth] WARNING: SQLITEND_DASHBOARD_HOSTS is set (${config.dashboardHosts.join(", ")}) but SQLITEND_COOKIE_SECURE is not "on" — ` +
+      "behind a TLS-terminating tunnel the session cookie would be issued without Secure",
   );
 }
 
@@ -297,7 +304,7 @@ const server = Bun.serve({
       // Host allowlist: the API answers only when addressed as this listener
       // (defeats DNS-rebinding, where the attacker's page reaches our socket
       // but presents their own hostname).
-      if (!isAllowedHost(url.host, config.port, config.host)) return new Response("Forbidden", { status: 403 });
+      if (!isAllowedHost(url.host, config.port, config.host, config.dashboardHosts)) return new Response("Forbidden", { status: 403 });
       // Browser-initiated cross-site requests announce themselves via
       // Sec-Fetch-Site (Chrome/Edge/Firefox); allow same-origin + direct tools.
       const sfs = req.headers.get("sec-fetch-site");
