@@ -132,6 +132,13 @@ if (dns) {
   );
 }
 
+if (config.dashboardHosts.length > 0 && config.cookieSecure !== "on") {
+  console.warn(
+    `[auth] WARNING: SQLITEND_DASHBOARD_HOSTS is set (${config.dashboardHosts.join(", ")}) but SQLITEND_COOKIE_SECURE is not "on" — ` +
+      "behind a TLS-terminating tunnel the session cookie would be issued without Secure",
+  );
+}
+
 // A restore interrupted by a restart never resumes: its row stays auto_start=0
 // (so it was not launched empty) and is marked failed for the operator.
 for (const r of databases.list()) {

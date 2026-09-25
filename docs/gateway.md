@@ -152,7 +152,8 @@ an allow policy on your email.
   under their id (`https://<uuid>-libsql…`).
 - With the gateway on, a database name whose slug won't fit a DNS label (56 characters with the
   `-libsql` suffix) is rejected at creation.
-- The control plane (`:6100`) is **not** routed by the tunnel. Reach it over SSH/Tailscale only.
+- The control plane (`:6100`) is **not** routed by the tunnel by default. Reach it over SSH/Tailscale, or publish
+  exactly one named hostname through `SQLITEND_DASHBOARD_HOSTS` (above), behind Cloudflare Access. Never use a wildcard.
 - Optional hardening: put a Cloudflare Access application with a *service token* on the libsql
   hostnames. The Worker then adds `CF-Access-Client-Id`/`CF-Access-Client-Secret` through a custom
   `fetch` passed to `createClient`.
