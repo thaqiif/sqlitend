@@ -221,7 +221,7 @@ describe("import routes", () => {
     });
   }
   const post = (a: ReturnType<typeof app>, p: string, body: unknown) =>
-    a.request(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    a.request(p, { method: "POST", headers: { "content-type": "application/json", "x-sqlitend-csrf": "1" }, body: JSON.stringify(body) });
 
   test("202 + a restoring row with ports; the job runs to running", async () => {
     const { svc } = service();
@@ -229,8 +229,9 @@ describe("import routes", () => {
     const a = app(svc);
     const res = await post(a, `/api/workspaces/${wsId}/databases/import`, { name: "quranready-prod", file: "quranready_prod.db" });
     expect(res.status).toBe(202);
-    const body = (await res.json()) as { id: string; status: string; slug: string; port: number };
-    expect(body).toMatchObject({ status: "restoring", slug: "quranready-prod" });
+    const body = (await res.json()) as { id: string; status: string; slug: string; name: string; port: number };
+    expect(body).toMatchObject({ status: "restoring", name: "quranready-prod" });
+    expect(body.slug).toMatch(/^[a-z][a-z0-9]{11}$/);
     expect(body.port).toBeGreaterThan(0);
     await svc.settled(body.id);
     expect(databases.getById(body.id)!.status).toBe("running");
@@ -254,7 +255,7 @@ describe("import routes", () => {
     expect((await post(a, `/api/workspaces/${crypto.randomUUID()}/databases/import`, { name: "x", file: "a.db" })).status).toBe(404);
     const { id } = (await (await post(a, `/api/workspaces/${wsId}/databases/import`, { name: "slow", file: "a.db" })).json()) as { id: string };
     await Bun.sleep(50);
-    expect((await a.request(`/api/databases/${id}`, { method: "DELETE" })).status).toBe(409);
+    expect((await a.request(`/api/databases/${id}`, { method: "DELETE", headers: { "x-sqlitend-csrf": "1" } })).status).toBe(409);
     expect((await post(a, `/api/databases/${id}/start`, {})).status).toBe(409);
   });
 
@@ -270,7 +271,7 @@ describe("import routes", () => {
     expect(((await r.json()) as { error: { code: string } }).error.code).toBe("import_failed");
     const row = databases.getById(id)!;
     mkdirSync(`${row.data_dir}.import`, { recursive: true });
-    expect((await a.request(`/api/databases/${id}`, { method: "DELETE" })).status).toBe(204);
+    expect((await a.request(`/api/databases/${id}`, { method: "DELETE", headers: { "x-sqlitend-csrf": "1" } })).status).toBe(204);
     expect(existsSync(`${row.data_dir}.import`)).toBe(false);
   });
 

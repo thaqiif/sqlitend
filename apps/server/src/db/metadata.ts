@@ -22,7 +22,7 @@ export interface Migration {
  *  so the exact SQL text lives in migrations/. */
 export function migrations(): Migration[] {
   const dir = path.join(import.meta.dir, "migrations");
-  const files = ["001_init.sql", "002_failed_reason.sql", "003_dns.sql", "004_token_management.sql", "005_auth.sql", "006_backup_verify.sql"];
+  const files = ["001_init.sql", "002_failed_reason.sql", "003_dns.sql", "004_token_management.sql", "005_auth.sql", "006_backup_verify.sql", "007_db_name_per_workspace.sql"];
   return files.map((f) => ({ id: f.replace(/\.sql$/, ""), sql: readFileSync(path.join(dir, f), "utf8") }));
 }
 
@@ -71,10 +71,66 @@ export function migrate(db: Database): void {
       .get(m.id);
     if (recorded) continue;
     db.transaction(() => {
-      db.exec(m.sql);
+      // One statement at a time: bun:sqlite's exec() only surfaces an error
+      // raised by the LAST statement of a multi-statement string (and none at
+      // all when the text ends in whitespace), so a failing migration could
+      // otherwise be recorded as applied.
+      for (const stmt of splitSql(m.sql)) db.run(stmt);
       db.query("INSERT INTO schema_version(id, applied_at) VALUES (?, ?)").run(m.id, Date.now());
     })();
   }
+}
+
+/**
+ * Split SQL text into statements at top-level `;`, honouring '…' and "…" / `…`
+ * / […] quoting and -- / block comments. Trailing comments and whitespace are
+ * dropped. No trigger bodies (BEGIN … END) are supported — none are used.
+ */
+export function splitSql(sql: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let i = 0;
+  const n = sql.length;
+  const push = () => {
+    const stripped = cur.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, "").trim();
+    if (stripped) out.push(cur.trim());
+    cur = "";
+  };
+  while (i < n) {
+    const c = sql[i]!;
+    if (c === "-" && sql[i + 1] === "-") {
+      const end = sql.indexOf("\n", i);
+      const j = end === -1 ? n : end;
+      cur += sql.slice(i, j);
+      i = j;
+    } else if (c === "/" && sql[i + 1] === "*") {
+      const end = sql.indexOf("*/", i + 2);
+      if (end === -1) throw new Error("unterminated /* comment in migration");
+      cur += sql.slice(i, end + 2);
+      i = end + 2;
+    } else if (c === "'" || c === '"' || c === "`" || c === "[") {
+      const close = c === "[" ? "]" : c;
+      let j = i + 1;
+      for (;;) {
+        if (j >= n) throw new Error(`unterminated ${c} quote in migration`);
+        if (sql[j] === close) {
+          if (close !== "]" && sql[j + 1] === close) { j += 2; continue; } // doubled quote = escaped
+          break;
+        }
+        j++;
+      }
+      cur += sql.slice(i, j + 1);
+      i = j + 1;
+    } else if (c === ";") {
+      push();
+      i++;
+    } else {
+      cur += c;
+      i++;
+    }
+  }
+  push();
+  return out;
 }
 
 /** Aggregate handle handed to the control plane: the open db plus its repos. */

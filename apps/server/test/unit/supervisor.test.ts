@@ -84,7 +84,7 @@ function makeRow(
     id: crypto.randomUUID(),
     workspace_id: "ws", // parent created in withSupervisor
     slug: `db-${crypto.randomUUID().slice(0, 8)}`,
-    name: "Supervisor test database",
+    name: `Supervisor test database ${crypto.randomUUID().slice(0, 8)}`,
     data_dir: path.join(root, "workspaces", "ws", "db"),
     created_at: Date.now(),
     ...over,

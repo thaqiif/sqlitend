@@ -116,7 +116,7 @@ sqlitend audit 50          # last 50 audit entries
   `sqlitend audit`.
 - Settings for the server and the CLI live in `~/.config/sqlitend/env`, which the launcher and the
   systemd unit both read.
-- `SQLITEND_AUTH=off` disables login and is refused unless `SQLITEND_HOST` is loopback (local dev).
+- `SQLITEND_AUTH=off` disables login and is refused unless `SQLITEND_HOST` is loopback. Use it for local dev, or with the dashboard behind Cloudflare Access (see docs/gateway.md). CSRF checks and the audit log stay on.
 - Still expose the control plane only over SSH or Tailscale. The login is a second line of defence,
   not a reason to publish port 6100.
 

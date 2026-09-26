@@ -20,7 +20,7 @@ import {
 import type { Config } from "../config.ts";
 import type { WorkspacesRepo } from "../db/repos/workspaces.ts";
 import type { DatabasesRepo, DatabaseRow as DbRow } from "../db/repos/databases.ts";
-import { SlugExistsError } from "../db/repos/databases.ts";
+import { NameExistsError, SlugExistsError } from "../db/repos/databases.ts";
 import type { TokenRow, TokensRepo } from "../db/repos/tokens.ts";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { Supervisor } from "../supervisor/supervisor.ts";
@@ -36,7 +36,7 @@ import { verifyHealth, type VerifyService } from "../backup/verify.ts";
 import type { VerificationsRepo } from "../db/repos/verifications.ts";
 import type { ControlBackupService } from "../backup/control.ts";
 import { ImportRequestSchema, RestoreRequestSchema, type BackupStatus, type ImportRequest, type RestoreRequest } from "@sqlitend/shared";
-import { installAuth, type AppEnv, type AuthDeps } from "./auth-routes.ts";
+import { installAuth, installCsrfOnly, type AppEnv, type AuthDeps } from "./auth-routes.ts";
 import { maxSlugLength, parseHostTemplate, publicKeyFor, renderHost } from "../gateway/gateway.ts";
 
 // ---------------------------------------------------------------------------
@@ -118,6 +118,28 @@ function zodDetail(err: unknown): string | undefined {
     .join("; ");
 }
 
+const SLUG_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+/** A database's public key: 12 random chars (~62 bits), starting with a letter.
+ *  Never derived from the name, so names can repeat across workspaces and
+ *  hostnames reveal nothing. */
+export function randomDbSlug(): string {
+  // Rejection sampling for both alphabets (26 letters first, then 36 chars),
+  // refilling the buffer if it ever runs dry.
+  let out = "";
+  while (out.length < 12) {
+    for (const b of crypto.getRandomValues(new Uint8Array(32))) {
+      if (out.length === 0) {
+        if (b < 234) out += SLUG_ALPHABET[b % 26]!; // 234 = 9 × 26
+      } else if (b < 252) {
+        out += SLUG_ALPHABET[b % 36]!; // 252 = 7 × 36
+      }
+      if (out.length === 12) break;
+    }
+  }
+  return out;
+}
+
 function slugify(name: string): string {
   return (
     name
@@ -147,6 +169,8 @@ export interface RoutesDeps {
   backup?: Replicator | null;
   restore?: RestoreService | null;
   importer?: ImportService | null;
+  /** Audit sink when login is off (SQLITEND_AUTH=off); with login it comes via `auth`. */
+  auditRepo?: AuthDeps["repo"] | null;
   control?: ControlBackupService | null;
   verify?: { service: VerifyService; results: VerificationsRepo; maxAgeMs: number; startedAt?: number } | null;
   /** Control-plane login; absent only with SQLITEND_AUTH=off (loopback dev). */
@@ -170,6 +194,7 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
   });
 
   if (d.auth) installAuth(app, d.auth);
+  else installCsrfOnly(app, d.auditRepo ?? null);
 
   // ---- system -------------------------------------------------------------
   // Note: dataRoot/sqldPath are deliberately NOT exposed over the API (an
@@ -580,39 +605,38 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     name: string,
     o: { status: DatabaseStatus; autoStart: 0 | 1 },
   ): Promise<{ row: DbRow; pair: { http: number; grpc: number } }> {
-    const slug = slugify(name);
-    if (hostTemplate && slug.length > maxSlugLength(hostTemplate)) {
-      throw new ApiError(
-        400,
-        "name_too_long",
-        `name is too long for a public hostname: slug "${slug}" exceeds ${maxSlugLength(hostTemplate)} characters`,
-      );
-    }
     const id = randomUUID();
-    const dataDir = path.join(d.config.dataRoot, "workspaces", ws.slug, "dbs", slug);
     // Reserve the explicit http+grpc pair before creating the row/spawning.
     const pair = await d.supervisor.portAllocator.allocatePair();
     try {
-      const row = d.databases.create({
-        id,
-        workspace_id: ws.id,
-        slug,
-        name,
-        status: o.status,
-        data_dir: dataDir,
-        auth_key: dbKeyRelPath(id), // documentation of the per-DB pub-file location
-        auto_start: o.autoStart,
-        created_at: Date.now(),
-      });
-      d.databases.updateRuntime(id, { port: pair.http, grpc_port: pair.grpc });
-      return { row: d.databases.getById(id)!, pair };
+      for (let attempt = 0; ; attempt++) {
+        const slug = randomDbSlug();
+        try {
+          const row = d.databases.create({
+            id,
+            workspace_id: ws.id,
+            slug,
+            name,
+            status: o.status,
+            data_dir: path.join(d.config.dataRoot, "workspaces", ws.slug, "dbs", slug),
+            auth_key: dbKeyRelPath(id), // documentation of the per-DB pub-file location
+            auto_start: o.autoStart,
+            created_at: Date.now(),
+          });
+          d.databases.updateRuntime(id, { port: pair.http, grpc_port: pair.grpc });
+          return { row: d.databases.getById(id)!, pair };
+        } catch (err) {
+          // A random-slug collision (~1 in 2^62) just draws again.
+          if (err instanceof SlugExistsError && attempt < 5) continue;
+          throw err;
+        }
+      }
     } catch (err) {
       // The pair was reserved but no row will ever own it — release or the
       // pool permanently shrinks by two ports per collision.
       d.supervisor.portAllocator.release(pair);
-      if (err instanceof SlugExistsError) {
-        // Slugs are globally UNIQUE (across workspaces) — say so explicitly.
-        throw new ApiError(409, "slug_conflict", `a database with slug "${slug}" already exists (slugs are global across workspaces)`);
+      if (err instanceof NameExistsError) {
+        throw new ApiError(409, "name_conflict", `a database named "${name}" already exists in this workspace`);
       }
       throw err;
     }

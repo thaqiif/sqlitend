@@ -83,7 +83,7 @@ export class DatabasesRepo {
     return (row as DatabaseRow | undefined) ?? null;
   }
 
-  /** Insert a database. Throws (SlugExistsError) if the slug already exists. */
+  /** Insert a database. Throws SlugExistsError (slug taken, globally) or NameExistsError (name taken in the workspace). */
   create(input: CreateDatabaseInput): DatabaseRow {
     const row: DatabaseRow = {
       id: input.id,
@@ -119,6 +119,10 @@ export class DatabasesRepo {
         );
     } catch (err) {
       if (isUniqueViolation(err)) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/databases\.workspace_id|databases\.name/.test(msg)) {
+          throw new NameExistsError(`a database named "${row.name}" already exists in this workspace`);
+        }
         throw new SlugExistsError(`database slug "${row.slug}" already exists`);
       }
       throw err;
@@ -204,3 +208,6 @@ function isUniqueViolation(err: unknown): boolean {
 /** Raised by create() when the (globally unique) slug is already taken, so the
  *  API layer can answer 409 instead of 500. */
 export class SlugExistsError extends Error {}
+
+/** Raised by create() when the workspace already has a database with that name. */
+export class NameExistsError extends Error {}
