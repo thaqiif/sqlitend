@@ -8,9 +8,8 @@ interface Props {
 }
 
 /**
- * Modal that shows a freshly-issued token exactly once. The raw secret is shown
- * only here and never stored/returned again; the user acknowledges by choosing
- * "I saved it". There is deliberately NO backdrop-click or Escape dismissal
+ * Modal that shows a freshly-issued token. It can be copied again later from
+ * the token list (Copy); the user acknowledges by choosing "I saved it". There is deliberately NO backdrop-click or Escape dismissal
  * here — a stray click must not destroy the only copy of the secret.
  */
 export function TokenReveal({ token, onDismiss }: Props) {
@@ -36,8 +35,8 @@ export function TokenReveal({ token, onDismiss }: Props) {
     >
       <h2 className="modal-title">Token generated</h2>
       <p className="hint">
-        This token is shown only once and cannot be retrieved again. Scope{" "}
-        <strong>{token.scope}</strong> for <em>{token.dbSlug}</em>. Copy it now.
+        Copy it now, or later with Copy in the token list. Scope{" "}
+        <strong>{token.scope}</strong> for <em>{token.dbSlug}</em>.
       </p>
       <pre className="token-box" data-testid="token-secret">{token.token}</pre>
       <div className="modal-actions">

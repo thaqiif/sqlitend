@@ -65,6 +65,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 }
 
 export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenDatabase }: Props) {
+  const [copiedJti, setCopiedJti] = useState<string | null>(null);
   const [showRestore, setShowRestore] = useState(false);
   const [verifying, setVerifying] = useState(false);
 
@@ -203,7 +204,6 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
     setTokens(await api.listTokens(databaseId).catch(() => tokens));
   }
 
-  const [copiedJti, setCopiedJti] = useState<string | null>(null);
   async function handleCopy(t: Token) {
     setActionError(null);
     try {
