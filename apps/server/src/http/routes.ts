@@ -124,12 +124,18 @@ const SLUG_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
  *  Never derived from the name, so names can repeat across workspaces and
  *  hostnames reveal nothing. */
 export function randomDbSlug(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(24));
-  let out = SLUG_ALPHABET[bytes[0]! % 26]!;
-  for (let i = 1; out.length < 12; i++) {
-    const b = bytes[i]!;
-    if (b >= 252) continue; // 252 = 7 × 36: drop the tail for an unbiased pick
-    out += SLUG_ALPHABET[b % 36]!;
+  // Rejection sampling for both alphabets (26 letters first, then 36 chars),
+  // refilling the buffer if it ever runs dry.
+  let out = "";
+  while (out.length < 12) {
+    for (const b of crypto.getRandomValues(new Uint8Array(32))) {
+      if (out.length === 0) {
+        if (b < 234) out += SLUG_ALPHABET[b % 26]!; // 234 = 9 × 26
+      } else if (b < 252) {
+        out += SLUG_ALPHABET[b % 36]!; // 252 = 7 × 36
+      }
+      if (out.length === 12) break;
+    }
   }
   return out;
 }

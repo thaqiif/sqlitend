@@ -137,7 +137,7 @@ an allow policy on your email.
 
 **Letting Cloudflare Access be the only login.** Set `SQLITEND_AUTH=off`. It is only accepted with a loopback
 `SQLITEND_HOST`, which is how this setup runs. The dashboard then opens with no login screen. The CSRF header is still
-required on every change, and the audit log still records everything. Boot prints a loud warning naming the
+required on every change, and the audit log still records every change that passes those checks. Boot prints a loud warning naming the
 dashboard hostname. **Without Access in front, anyone who can reach that hostname is admin.**
 
 ## Behaviour and security notes

@@ -303,3 +303,49 @@ describe("migration-on-data (001 → full migrate)", () => {
     rmSync(stale, { recursive: true, force: true });
   });
 });
+
+describe("migration runner (bun:sqlite exec swallows non-final errors)", () => {
+  test("splitSql honours quotes and comments", async () => {
+    const { splitSql } = await import("../../src/db/metadata.ts");
+    expect(splitSql("-- a; b\nCREATE TABLE a(x TEXT DEFAULT ';'); /* ; */ INSERT INTO a VALUES('it''s;');\n-- tail\n")).toEqual([
+      "-- a; b\nCREATE TABLE a(x TEXT DEFAULT ';')",
+      "/* ; */ INSERT INTO a VALUES('it''s;')",
+    ]);
+    expect(splitSql("  \n-- only a comment\n")).toEqual([]);
+  });
+
+  test("a failing statement that is not the last one aborts the migration and is not recorded", async () => {
+    const { splitSql } = await import("../../src/db/metadata.ts");
+    const db = new Database(":memory:");
+    db.exec("CREATE TABLE schema_version(id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)");
+    expect(() =>
+      db.transaction(() => {
+        for (const s of splitSql("CREATE TABLE a(x); INSERT INTO nope VALUES (1); CREATE TABLE b(x);\n")) db.run(s);
+        db.run("INSERT INTO schema_version VALUES ('x', 0)");
+      })(),
+    ).toThrow(/no such table: nope/);
+    expect(db.query("SELECT count(*) n FROM sqlite_master WHERE name IN ('a','b')").get()).toEqual({ n: 0 });
+    expect(db.query("SELECT count(*) n FROM schema_version").get()).toEqual({ n: 0 });
+  });
+
+  test("007 renames pre-existing same-name databases in a workspace, then enforces uniqueness", () => {
+    const db = openDb(":memory:");
+    migrate(db);
+    db.exec("DROP INDEX idx_databases_workspace_name");
+    db.query("DELETE FROM schema_version WHERE id = '007_db_name_per_workspace'").run();
+    db.query("INSERT INTO workspaces(id,slug,name,created_at) VALUES ('w','w','w',0), ('v','v','v',0)").run();
+    const ins = db.query("INSERT INTO databases(id,workspace_id,slug,name,data_dir,created_at) VALUES (?,?,?,?,?,0)");
+    ins.run("11111111-a", "w", "a", "Bots", "/x/a");
+    ins.run("22222222-b", "w", "b", "bots", "/x/b");
+    ins.run("33333333-c", "v", "c", "Bots", "/x/c"); // other workspace: untouched
+    migrate(db);
+    const names = db.query("SELECT id, name FROM databases ORDER BY id").all();
+    expect(names).toEqual([
+      { id: "11111111-a", name: "Bots" },
+      { id: "22222222-b", name: "bots (22222222)" },
+      { id: "33333333-c", name: "Bots" },
+    ]);
+    expect(db.query("SELECT 1 AS ok FROM sqlite_master WHERE name = 'idx_databases_workspace_name'").get()).toEqual({ ok: 1 });
+    expect(() => ins.run("44444444-d", "w", "d", "BOTS", "/x/d")).toThrow(/UNIQUE/);
+  });
+});
