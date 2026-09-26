@@ -44,7 +44,7 @@ import { ControlBackupService, parseBackupKey, snapshotControlPlane } from "./ba
 import { VerificationsRepo } from "./db/repos/verifications.ts";
 import { healthReport } from "./http/health.ts";
 
-export const VERSION = "0.1.3";
+export const VERSION = "0.1.4";
 
 // ---------------------------------------------------------------------------
 // Config + persistence (fail loudly and actionably on fs problems)

@@ -128,14 +128,14 @@ This brings a database from another host (for example a namespace from a plain `
    database, so a stale one would replay the wrong pages.
 2. Start the import. The file is referred to by its **name only**; paths and symlinks are refused.
    ```
-   GET  /api/imports                                   → {dir, files:[{file, bytes, tables}]}
+   GET  /api/imports                                   → {dir, files:[{file, bytes, pageSize, pages, wal}]}  (reads the header only)
    POST /api/workspaces/:id/databases/import  {"name":"quranready-prod","file":"quranready_prod.db"}  → 202
    ```
 3. sqlitend copies the file's bytes into a private staging dir, logs the size and SHA-256 (compare them with your copy), compacts it with `VACUUM INTO`, runs `PRAGMA integrity_check` on the copy,
    places it where sqld expects it and starts it. Then the usual start-up steps run: its DNS record is created and
    Litestream replication begins. While this runs the database shows `restoring` and cannot be started,
    stopped or deleted. On any problem it becomes `failed` with `import failed: …` and nothing is published.
-4. The import works only on its own copy. The source stays byte for byte as it was (the listing only opens it read-only). Delete it from `imports/` once the new database checks out.
+4. The import works only on its own copy. The source stays byte for byte as it was. The listing reads only the 100-byte header, never opening the file with SQLite. Delete it from `imports/` once the new database checks out.
 
 Tokens are **not** carried over. Mint a new token for the new hostname and give it to the app.
 
