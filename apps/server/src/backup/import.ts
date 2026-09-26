@@ -100,7 +100,10 @@ export class ImportService {
       const r = this.resolve(f);
       if ("error" in r) continue;
       const h = readHeader(r.path);
-      if (h) out.push({ file: f, bytes: lstatSync(r.path).size, pageSize: h.pageSize, pages: h.pages, wal: h.wal });
+      if (!h) continue;
+      const bytes = lstatSync(r.path).size;
+      // From the file size: the header's page count is only valid when its change counter matches.
+      out.push({ file: f, bytes, pageSize: h.pageSize, pages: Math.floor(bytes / h.pageSize), wal: h.wal });
     }
     return out.sort((a, b) => a.file.localeCompare(b.file));
   }
@@ -190,7 +193,7 @@ function lstatSafe(p: string): boolean {
 const MAGIC = "SQLite format 3\u0000";
 
 /** Parse the 100-byte SQLite header without SQLite (no side files). */
-function readHeader(p: string): { pageSize: number; pages: number; wal: boolean } | null {
+function readHeader(p: string): { pageSize: number; wal: boolean } | null {
   const buf = Buffer.alloc(100);
   let fd: number | null = null;
   try {
@@ -203,5 +206,5 @@ function readHeader(p: string): { pageSize: number; pages: number; wal: boolean 
   }
   if (buf.toString("latin1", 0, 16) !== MAGIC) return null;
   const raw = buf.readUInt16BE(16);
-  return { pageSize: raw === 1 ? 65536 : raw, pages: buf.readUInt32BE(28), wal: buf[18] === 2 && buf[19] === 2 };
+  return { pageSize: raw === 1 ? 65536 : raw, wal: buf[18] === 2 && buf[19] === 2 };
 }
