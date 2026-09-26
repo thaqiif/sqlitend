@@ -198,7 +198,26 @@ describe("resolve + list", () => {
     symlinkSync(path.join(dir, "outside.db"), path.join(svc.dir, "link.db"));
     const files = svc.list();
     expect(files.map((f) => f.file)).toEqual(["ok.db"]);
-    expect(files[0]!.tables).toBe(1);
+    expect(files[0]!.pages).toBeGreaterThan(0);
+    expect(files[0]!.pageSize).toBe(4096);
+  });
+
+  test("listing a WAL-mode file creates no side files, so it can still be imported (found in the M-06 rehearsal)", async () => {
+    const { svc, started } = service();
+    const src = path.join(svc.dir, "walmode.db");
+    const db = new SQLite(src);
+    db.exec("PRAGMA journal_mode=WAL; CREATE TABLE ayat(id INTEGER PRIMARY KEY, text TEXT); INSERT INTO ayat(text) VALUES ('a');");
+    db.close(); // clean close: -wal/-shm removed, header still says WAL
+    expect(existsSync(`${src}-wal`)).toBe(false);
+    const listed = svc.list();
+    expect(listed).toMatchObject([{ file: "walmode.db", wal: true }]);
+    for (const x of ["-wal", "-shm"]) expect(existsSync(src + x)).toBe(false);
+    expect(svc.resolve("walmode.db")).toEqual({ path: src });
+    const t = target();
+    svc.start(src, t);
+    await svc.settled(t.id);
+    expect(databases.getById(t.id)!.status).toBe("running");
+    expect(started).toEqual([t.id]);
   });
 });
 

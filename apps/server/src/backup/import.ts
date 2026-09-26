@@ -17,7 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import { Database as SQLite } from "bun:sqlite";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { DatabaseRow, DatabasesRepo } from "../db/repos/databases.ts";
@@ -42,7 +42,10 @@ export interface ImportDeps {
 export interface ImportFileInfo {
   file: string;
   bytes: number;
-  tables: number;
+  pageSize: number;
+  pages: number;
+  /** Header says WAL mode (fine: the import makes its own copy). */
+  wal: boolean;
 }
 
 export class ImportService {
@@ -84,7 +87,11 @@ export class ImportService {
     return { path: p };
   }
 
-  /** Files waiting in the import dir that open as SQLite (for the UI/CLI). */
+  /**
+   * Files waiting in the import dir that carry a SQLite header. Never opens
+   * them with SQLite: even a read-only open of a WAL-mode file creates -wal and
+   * -shm next to it, which would then (rightly) block the import.
+   */
   list(): ImportFileInfo[] {
     if (!existsSync(this.dir)) return [];
     const out: ImportFileInfo[] = [];
@@ -92,16 +99,8 @@ export class ImportService {
       if (SIDE_FILES.some((x) => f.endsWith(x))) continue;
       const r = this.resolve(f);
       if ("error" in r) continue;
-      let db: SQLite | null = null;
-      try {
-        db = new SQLite(r.path, { readonly: true });
-        const t = db.query("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get() as { n: number };
-        out.push({ file: f, bytes: lstatSync(r.path).size, tables: t.n });
-      } catch {
-        /* not a SQLite file: not offered */
-      } finally {
-        db?.close();
-      }
+      const h = readHeader(r.path);
+      if (h) out.push({ file: f, bytes: lstatSync(r.path).size, pageSize: h.pageSize, pages: h.pages, wal: h.wal });
     }
     return out.sort((a, b) => a.file.localeCompare(b.file));
   }
@@ -186,4 +185,23 @@ function lstatSafe(p: string): boolean {
   } catch {
     return false;
   }
+}
+
+const MAGIC = "SQLite format 3\u0000";
+
+/** Parse the 100-byte SQLite header without SQLite (no side files). */
+function readHeader(p: string): { pageSize: number; pages: number; wal: boolean } | null {
+  const buf = Buffer.alloc(100);
+  let fd: number | null = null;
+  try {
+    fd = openSync(p, "r");
+    if (readSync(fd, buf, 0, 100, 0) < 100) return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+  if (buf.toString("latin1", 0, 16) !== MAGIC) return null;
+  const raw = buf.readUInt16BE(16);
+  return { pageSize: raw === 1 ? 65536 : raw, pages: buf.readUInt32BE(28), wal: buf[18] === 2 && buf[19] === 2 };
 }
