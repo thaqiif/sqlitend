@@ -137,6 +137,11 @@ export const api = {
   listTokens: (id: string) =>
     request<Token[]>(`/databases/${encodeURIComponent(id)}/tokens`),
 
+  revealToken: (id: string, jti: string) =>
+    request<{ jti: string; token: string }>(`/databases/${encodeURIComponent(id)}/tokens/${encodeURIComponent(jti)}/reveal`, {
+      method: "POST",
+    }),
+
   revokeToken: (id: string, jti: string) =>
     request<Token>(`/databases/${encodeURIComponent(id)}/tokens/${encodeURIComponent(jti)}`, {
       method: "DELETE",

@@ -100,6 +100,8 @@ export const TokenSchema = z.object({
   revokedAt: z.number().int().nullable().default(null),
   /** Last request seen through the gateway (throttled, ~1/min). */
   lastUsedAt: z.number().int().nullable().default(null),
+  /** The JWT is stored and can be revealed again (issued since v0.1.3). */
+  copyable: z.boolean().default(false),
 });
 export type Token = z.infer<typeof TokenSchema>;
 

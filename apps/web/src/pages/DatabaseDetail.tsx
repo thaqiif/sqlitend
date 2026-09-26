@@ -65,6 +65,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 }
 
 export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenDatabase }: Props) {
+  const [copiedJti, setCopiedJti] = useState<string | null>(null);
   const [showRestore, setShowRestore] = useState(false);
   const [verifying, setVerifying] = useState(false);
 
@@ -201,6 +202,22 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
   async function handleTokenIssued(issued: TokenIssued) {
     setRevealed(issued);
     setTokens(await api.listTokens(databaseId).catch(() => tokens));
+  }
+
+  async function handleCopy(t: Token) {
+    setActionError(null);
+    try {
+      const { token } = await api.revealToken(databaseId, t.jti);
+      try {
+        await navigator.clipboard.writeText(token);
+        setCopiedJti(t.jti);
+        setTimeout(() => setCopiedJti((j) => (j === t.jti ? null : j)), 1500);
+      } catch {
+        window.prompt("Copy the token:", token); // clipboard blocked: let the user copy by hand
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not load the token");
+    }
   }
 
   async function handleRevoke(t: Token) {
@@ -363,6 +380,13 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
                   <td className="cell-end">
                     {tokenState(t) !== "revoked" && (
                       <>
+                        {t.copyable ? (
+                          <button type="button" className="btn ghost small" onClick={() => handleCopy(t)}>
+                            {copiedJti === t.jti ? "Copied" : "Copy"}
+                          </button>
+                        ) : (
+                          <span className="muted small" title="Issued before tokens were stored — rotate to get one you can copy">not copyable</span>
+                        )}
                         <button
                           type="button"
                           className="btn ghost small"

@@ -88,6 +88,7 @@ function rowToToken(r: TokenRow) {
     name: r.name ?? null,
     revokedAt: r.revoked_at ?? null,
     lastUsedAt: r.last_used_at ?? null,
+    copyable: !!r.has_value,
   };
 }
 
@@ -526,8 +527,20 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
       createdAt: issued.createdAt,
       expiresAt: issued.expiresAt,
       name: issued.name,
+      token: issued.token,
     });
     return c.json(issued, 201);
+  });
+
+  // Show a stored token again (POST so it passes the CSRF gate and is audited).
+  app.post("/api/databases/:id/tokens/:jti/reveal", (c) => {
+    const row = requireDb(c.req.param("id"));
+    const tok = d.tokens.getByJti(c.req.param("jti"));
+    if (!tok || tok.database_id !== row.id) throw new ApiError(404, "not_found", "token not found");
+    if (tok.revoked_at) throw new ApiError(409, "revoked", "this token is revoked");
+    const value = d.tokens.valueOf(tok.jti);
+    if (!value) throw new ApiError(409, "not_stored", "this token was issued before tokens were stored — rotate it to get one you can copy");
+    return c.json({ jti: tok.jti, token: value });
   });
 
   // Revocation is enforced by the gateway: sqld validates JWTs statelessly and

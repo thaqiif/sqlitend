@@ -138,6 +138,7 @@ export async function mintToken(deps: MintTokenDeps, tokenTtlHours: number): Pro
     createdAt: now,
     expiresAt,
     token,
+    copyable: true,
     dbSlug: deps.dbSlug,
     name: deps.name ?? null,
     revokedAt: null,

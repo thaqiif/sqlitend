@@ -22,7 +22,7 @@ export interface Migration {
  *  so the exact SQL text lives in migrations/. */
 export function migrations(): Migration[] {
   const dir = path.join(import.meta.dir, "migrations");
-  const files = ["001_init.sql", "002_failed_reason.sql", "003_dns.sql", "004_token_management.sql", "005_auth.sql", "006_backup_verify.sql", "007_db_name_per_workspace.sql"];
+  const files = ["001_init.sql", "002_failed_reason.sql", "003_dns.sql", "004_token_management.sql", "005_auth.sql", "006_backup_verify.sql", "007_db_name_per_workspace.sql", "008_token_value.sql"];
   return files.map((f) => ({ id: f.replace(/\.sql$/, ""), sql: readFileSync(path.join(dir, f), "utf8") }));
 }
 

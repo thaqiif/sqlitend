@@ -14,6 +14,8 @@ export interface TokenRow {
   name: string | null;
   revoked_at: number | null;
   last_used_at: number | null;
+  /** 1 when the JWT itself is stored (issued on/after migration 008). */
+  has_value: number;
 }
 
 export interface CreateTokenInput {
@@ -23,9 +25,12 @@ export interface CreateTokenInput {
   createdAt: number;
   expiresAt: number;
   name?: string | null;
+  /** The issued JWT, kept so it can be revealed again. */
+  token?: string | null;
 }
 
-const FIELDS = "jti, database_id, scope, created_at, expires_at, name, revoked_at, last_used_at";
+const COLUMNS = "jti, database_id, scope, created_at, expires_at, name, revoked_at, last_used_at";
+const FIELDS = `${COLUMNS}, (token IS NOT NULL) AS has_value`;
 
 export class TokensRepo {
   constructor(private readonly db: Database) {}
@@ -35,10 +40,16 @@ export class TokensRepo {
     const name = input.name ?? null;
     this.db
       .query(
-        "INSERT INTO tokens(jti, database_id, scope, created_at, expires_at, name) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tokens(jti, database_id, scope, created_at, expires_at, name, token) VALUES (?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(jti, databaseId, scope, createdAt, expiresAt, name);
-    return { jti, database_id: databaseId, scope, created_at: createdAt, expires_at: expiresAt, name, revoked_at: null, last_used_at: null };
+      .run(jti, databaseId, scope, createdAt, expiresAt, name, input.token ?? null);
+    return { jti, database_id: databaseId, scope, created_at: createdAt, expires_at: expiresAt, name, revoked_at: null, last_used_at: null, has_value: input.token ? 1 : 0 };
+  }
+
+  /** The stored JWT, or null (issued before 008). */
+  valueOf(jti: string): string | null {
+    const r = this.db.query("SELECT token FROM tokens WHERE jti = ?").get(jti) as { token: string | null } | undefined;
+    return r?.token ?? null;
   }
 
   getByJti(jti: string): TokenRow | null {
@@ -56,7 +67,7 @@ export class TokensRepo {
   listExpiringBetween(after: number, before: number): (TokenRow & { db_slug: string })[] {
     return this.db
       .query(
-        `SELECT ${FIELDS.split(", ").map((f) => `t.${f}`).join(", ")}, d.slug AS db_slug
+        `SELECT ${COLUMNS.split(", ").map((f) => `t.${f}`).join(", ")}, (t.token IS NOT NULL) AS has_value, d.slug AS db_slug
          FROM tokens t JOIN databases d ON d.id = t.database_id
          WHERE t.revoked_at IS NULL AND t.expires_at >= ? AND t.expires_at < ? ORDER BY t.expires_at`,
       )
