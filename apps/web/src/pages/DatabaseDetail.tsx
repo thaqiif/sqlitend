@@ -203,6 +203,23 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
     setTokens(await api.listTokens(databaseId).catch(() => tokens));
   }
 
+  const [copiedJti, setCopiedJti] = useState<string | null>(null);
+  async function handleCopy(t: Token) {
+    setActionError(null);
+    try {
+      const { token } = await api.revealToken(databaseId, t.jti);
+      try {
+        await navigator.clipboard.writeText(token);
+        setCopiedJti(t.jti);
+        setTimeout(() => setCopiedJti((j) => (j === t.jti ? null : j)), 1500);
+      } catch {
+        window.prompt("Copy the token:", token); // clipboard blocked: let the user copy by hand
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not load the token");
+    }
+  }
+
   async function handleRevoke(t: Token) {
     const label = t.name ? `"${t.name}"` : "this token";
     if (!window.confirm(`Revoke ${label}? Clients using it are refused by the gateway immediately.`)) return;
@@ -363,6 +380,13 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
                   <td className="cell-end">
                     {tokenState(t) !== "revoked" && (
                       <>
+                        {t.copyable ? (
+                          <button type="button" className="btn ghost small" onClick={() => handleCopy(t)}>
+                            {copiedJti === t.jti ? "Copied" : "Copy"}
+                          </button>
+                        ) : (
+                          <span className="muted small" title="Issued before tokens were stored — rotate to get one you can copy">not copyable</span>
+                        )}
                         <button
                           type="button"
                           className="btn ghost small"

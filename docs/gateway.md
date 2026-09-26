@@ -110,6 +110,12 @@ WebSocket upgrades with 501.
 
 ## Tokens: naming, rotation, expiry
 
+Since v0.1.3 the issued JWT is **stored** in the metadata DB (0600; its off-box backup is encrypted). The
+dashboard's **Copy** button (`POST /api/databases/:id/tokens/:jti/reveal`, which needs the CSRF header and is
+audited as `token.reveal`) shows it again. Revoked tokens can't be revealed. Tokens issued before v0.1.3 weren't
+stored: rotate them to get one you can copy.
+
+
 - Give every token a name when you issue it, e.g. `worker-prod` (UI, or
   `POST /api/databases/:id/tokens {"name":"worker-prod","expiresInHours":8760}`).
 - **Rotate:** issue a replacement with the same name (the **Rotate** button prefills it), deploy it

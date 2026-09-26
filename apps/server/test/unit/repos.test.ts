@@ -197,7 +197,7 @@ describe("migration", () => {
         .all().map((r) => (r as { id: string }).id);
 
     const before = versions();
-    expect(before).toEqual(["001_init", "002_failed_reason", "003_dns", "004_token_management", "005_auth", "006_backup_verify", "007_db_name_per_workspace"]);
+    expect(before).toEqual(["001_init", "002_failed_reason", "003_dns", "004_token_management", "005_auth", "006_backup_verify", "007_db_name_per_workspace", "008_token_value"]);
     migrate(db);
     migrate(db);
     expect(versions()).toEqual(before);
@@ -285,7 +285,7 @@ describe("migration-on-data (001 → full migrate)", () => {
     const versions = db001
       .query("SELECT id FROM schema_version ORDER BY id")
       .all().map((r) => (r as { id: string }).id);
-    expect(versions).toEqual(["001_init", "002_failed_reason", "003_dns", "004_token_management", "005_auth", "006_backup_verify", "007_db_name_per_workspace"]);
+    expect(versions).toEqual(["001_init", "002_failed_reason", "003_dns", "004_token_management", "005_auth", "006_backup_verify", "007_db_name_per_workspace", "008_token_value"]);
 
     // Data from the 001-era schema is intact after the upgrade.
     const w2 = wRepo.getById(ws.id)!;

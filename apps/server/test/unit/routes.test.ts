@@ -538,3 +538,44 @@ describe("SQLITEND_AUTH=off (no login, e.g. behind Cloudflare Access)", () => {
     expect(audit[0]).toMatchObject({ action: "workspace.create", actor: "admin", outcome: "ok" });
   });
 });
+
+describe("token reveal (copy again)", () => {
+  test("a stored token can be revealed again; audited; not for revoked, legacy or other databases", async () => {
+    const { AuthRepo } = await import("../../src/db/repos/auth.ts");
+    const auditRepo = new AuthRepo(db);
+    const app = createRoutes({
+      config: loadConfig({}, { dataRoot: dir }),
+      workspaces, databases, tokens,
+      supervisor: stubSupervisor(), sampler: stubSampler, sqldOk: true, sqldVersion: "fake", version: "test",
+      auth: null, auditRepo,
+    });
+    const w = workspaces.create(wsRow(`ws-${uid().slice(0, 8)}`));
+    const a = databases.create(dbRow(w.id));
+    const b = databases.create(dbRow(w.id));
+    const issued = (await (await send(app, "POST", `/api/databases/${a.id}/tokens`, {})).json()) as { jti: string; token: string; copyable: boolean };
+    expect(issued.copyable).toBe(true);
+    const list = (await (await send(app, "GET", `/api/databases/${a.id}/tokens`)).json()) as { jti: string; copyable: boolean }[];
+    expect(list.find((t) => t.jti === issued.jti)!.copyable).toBe(true);
+
+    const r = await send(app, "POST", `/api/databases/${a.id}/tokens/${issued.jti}/reveal`);
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { token: string }).token).toBe(issued.token);
+    const noCsrf = await app.request(`/api/databases/${a.id}/tokens/${issued.jti}/reveal`, { method: "POST" });
+    expect(noCsrf.status).toBe(403);
+    expect((await send(app, "POST", `/api/databases/${b.id}/tokens/${issued.jti}/reveal`)).status).toBe(404);
+    const audit = (await (await app.request("/api/audit")).json()) as { action: string; target: string }[];
+    expect(audit.some((e) => e.action === "token.reveal" && e.target === issued.jti)).toBe(true);
+
+    // Legacy token (issued before 008: no stored value).
+    const legacy = tokens.create({ jti: uid(), databaseId: a.id, scope: "full", createdAt: 1, expiresAt: Date.now() + 3_600_000 });
+    expect(legacy.has_value).toBe(0);
+    const lr = await send(app, "POST", `/api/databases/${a.id}/tokens/${legacy.jti}/reveal`);
+    expect(lr.status).toBe(409);
+    expect(((await lr.json()) as { error: { code: string } }).error.code).toBe("not_stored");
+
+    expect((await send(app, "DELETE", `/api/databases/${a.id}/tokens/${issued.jti}`)).status).toBe(200);
+    const rr = await send(app, "POST", `/api/databases/${a.id}/tokens/${issued.jti}/reveal`);
+    expect(rr.status).toBe(409);
+    expect(((await rr.json()) as { error: { code: string } }).error.code).toBe("revoked");
+  });
+});
