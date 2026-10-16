@@ -46,13 +46,15 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly detail?: string;
+  readonly body?: Record<string, unknown>;
 
-  constructor(status: number, code: string, message: string, detail?: string) {
+  constructor(status: number, code: string, message: string, detail?: string, body?: Record<string, unknown>) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.detail = detail;
+    this.body = body;
   }
 }
 
@@ -88,6 +90,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       err?.code ?? "request_failed",
       err?.message ?? `Request failed (${res.status} ${res.statusText})`,
       err?.detail,
+      body && typeof body === "object" ? (body as Record<string, unknown>) : undefined,
     );
   }
 

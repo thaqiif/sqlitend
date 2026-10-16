@@ -18,7 +18,7 @@ import { openMetadata } from "../apps/server/src/db/metadata.ts";
 import { Supervisor } from "../apps/server/src/supervisor/supervisor.ts";
 import { Sampler, percentile } from "../apps/server/src/metrics/sampler.ts";
 import { createRoutes } from "../apps/server/src/http/routes.ts";
-import type { HranaExecutor, RawExecResult } from "../apps/server/src/db/hrana.ts";
+import { evaluateBatchCondition, type HranaBatchStepOutcome, type HranaExecutor, type RawExecResult } from "../apps/server/src/db/hrana.ts";
 import { CSRF_HEADER } from "../apps/server/src/http/auth-routes.ts";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "sqlitend-bench-"));
@@ -58,6 +58,42 @@ const hrana: HranaExecutor = {
       });
     }
     return { results, totalDurationMs: Number((performance.now() - t0).toFixed(3)) };
+  },
+  async batch(_target, steps) {
+    const t0 = performance.now();
+    const outcomes: HranaBatchStepOutcome[] = [];
+    for (const step of steps) {
+      if (!evaluateBatchCondition(step.condition, outcomes, () => !sqlite.inTransaction)) {
+        outcomes.push({ result: null, error: null });
+        continue;
+      }
+      const st0 = performance.now();
+      try {
+        const s = step.stmt;
+        const q = sqlite.query(s.sql);
+        const columns = q.columnNames;
+        let rawRows: unknown[][] = [];
+        if (columns.length > 0 && s.wantRows !== false) {
+          rawRows = q.values(...((s.args ?? []) as never[]));
+        } else {
+          q.run(...((s.args ?? []) as never[]));
+        }
+        outcomes.push({
+          result: {
+            columns,
+            columnTypes: columns.map(() => null),
+            rows: (rawRows ?? []) as never,
+            rowsAffected: 0,
+            lastInsertRowid: null,
+            durationMs: Number((performance.now() - st0).toFixed(3)),
+          },
+          error: null,
+        });
+      } catch (err) {
+        outcomes.push({ result: null, error: { message: (err as Error).message } });
+      }
+    }
+    return { outcomes, totalDurationMs: Number((performance.now() - t0).toFixed(3)) };
   },
 };
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Database as BunSqlite } from "bun:sqlite";
@@ -7,20 +7,77 @@ import { loadConfig, assertStartupAuth } from "../../src/config.ts";
 import { openMetadata, type Metadata } from "../../src/db/metadata.ts";
 import { Supervisor } from "../../src/supervisor/supervisor.ts";
 import { Sampler } from "../../src/metrics/sampler.ts";
-import { createRoutes } from "../../src/http/routes.ts";
+import { ApiError, createRoutes } from "../../src/http/routes.ts";
 import { AuthService } from "../../src/auth/session.ts";
 import { CSRF_HEADER } from "../../src/http/auth-routes.ts";
 import {
   checkReadOnlyStatement,
   createHttpHranaExecutor,
+  evaluateBatchCondition,
   splitSqlStatements,
+  type HranaBatchStepOutcome,
   type HranaExecutor,
   type RawExecResult,
+  type SqlValue,
 } from "../../src/db/hrana.ts";
 
+function execOneSqliteStmt(
+  db: BunSqlite,
+  s: { sql: string; args?: SqlValue[]; namedArgs?: Record<string, SqlValue>; wantRows?: boolean },
+): RawExecResult {
+  const st0 = performance.now();
+  const q = db.query(s.sql);
+  const columns = q.columnNames;
+  let rawRows: unknown[][] = [];
+  if (columns.length > 0 && s.wantRows !== false) {
+    if (s.namedArgs) {
+      const prefixed: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(s.namedArgs)) {
+        prefixed[`:${k}`] = v;
+        prefixed[`$${k}`] = v;
+        prefixed[`@${k}`] = v;
+      }
+      rawRows = q.values(prefixed as never);
+    } else {
+      rawRows = q.values(...((s.args ?? []) as never[]));
+    }
+  } else {
+    if (s.namedArgs) {
+      const prefixed: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(s.namedArgs)) {
+        prefixed[`:${k}`] = v;
+      }
+      q.run(prefixed as never);
+    } else {
+      q.run(...((s.args ?? []) as never[]));
+    }
+  }
+  const changes = db.query("SELECT changes(), last_insert_rowid()").values()[0] as [number, number];
+  const isSelect = columns.length > 0;
+  return {
+    columns,
+    columnTypes: columns.map(() => null),
+    rows: (rawRows ?? []).map((r) =>
+      r.map((cell) => {
+        if (cell === null || cell === undefined) return null;
+        if (typeof cell === "bigint") return Number(cell);
+        if (typeof cell === "number" || typeof cell === "string" || typeof cell === "boolean") return cell;
+        return String(cell);
+      }),
+    ),
+    rowsAffected: isSelect ? 0 : Number(changes[0] ?? 0),
+    lastInsertRowid: isSelect ? null : String(changes[1] ?? 0),
+    durationMs: Number((performance.now() - st0).toFixed(2)),
+  };
+}
+
 /**
- * In-memory SQLite-backed HranaExecutor that emulates sqld's /v2/pipeline
- * behavior against a real `bun:sqlite` database per dbId.
+ * In-memory SQLite-backed HranaExecutor that faithfully emulates real `sqld`:
+ *   • In `pipeline()` mode, a failed statement does NOT stop subsequent
+ *     statements from executing (matching sqld's `/v2/pipeline` `execute` behavior).
+ *   • In `batch()` mode, each step's `condition` (`ok`, `error`, `not`, `and`,
+ *     `or`, `is_autocommit`) is evaluated against prior step outcomes and
+ *     `!db.inTransaction`.
  */
 function createSqliteHranaExecutor(): { executor: HranaExecutor; getSqlite: (id: string) => BunSqlite; closeAll: () => void } {
   const dbs = new Map<string, BunSqlite>();
@@ -28,6 +85,7 @@ function createSqliteHranaExecutor(): { executor: HranaExecutor; getSqlite: (id:
     let db = dbs.get(id);
     if (!db) {
       db = new BunSqlite(":memory:");
+      db.run("PRAGMA foreign_keys = ON");
       dbs.set(id, db);
     }
     return db;
@@ -42,59 +100,49 @@ function createSqliteHranaExecutor(): { executor: HranaExecutor; getSqlite: (id:
       async pipeline(target, stmts) {
         const db = getSqlite(target.id);
         const t0 = performance.now();
-        const results: RawExecResult[] = [];
+        const entries: ({ ok: true; result: RawExecResult } | { ok: false; message: string })[] = [];
         for (const s of stmts) {
-          const st0 = performance.now();
           try {
-            const q = db.query(s.sql);
-            const columns = q.columnNames;
-            let rawRows: unknown[][] = [];
-            if (columns.length > 0 && s.wantRows !== false) {
-              if (s.namedArgs) {
-                const prefixed: Record<string, unknown> = {};
-                for (const [k, v] of Object.entries(s.namedArgs)) {
-                  prefixed[`:${k}`] = v;
-                  prefixed[`$${k}`] = v;
-                  prefixed[`@${k}`] = v;
-                }
-                rawRows = q.values(prefixed as never);
-              } else {
-                rawRows = q.values(...((s.args ?? []) as never[]));
-              }
-            } else {
-              if (s.namedArgs) {
-                const prefixed: Record<string, unknown> = {};
-                for (const [k, v] of Object.entries(s.namedArgs)) {
-                  prefixed[`:${k}`] = v;
-                }
-                q.run(prefixed as never);
-              } else {
-                q.run(...((s.args ?? []) as never[]));
-              }
-            }
-            const changes = db.query("SELECT changes(), last_insert_rowid()").values()[0] as [number, number];
-            const isSelect = columns.length > 0;
-            results.push({
-              columns,
-              columnTypes: columns.map(() => null),
-              rows: (rawRows ?? []).map((r) =>
-                r.map((cell) => {
-                  if (cell === null || cell === undefined) return null;
-                  if (typeof cell === "bigint") return Number(cell);
-                  if (typeof cell === "number" || typeof cell === "string" || typeof cell === "boolean") return cell;
-                  return String(cell);
-                }),
-              ),
-              rowsAffected: isSelect ? 0 : Number(changes[0] ?? 0),
-              lastInsertRowid: isSelect ? null : String(changes[1] ?? 0),
-              durationMs: Number((performance.now() - st0).toFixed(2)),
-            });
+            entries.push({ ok: true, result: execOneSqliteStmt(db, s) });
           } catch (err) {
-            const { ApiError } = await import("../../src/http/routes.ts");
-            throw new ApiError(400, "sql_error", (err as Error).message);
+            // Keep executing subsequent statements in pipeline mode, matching real sqld!
+            entries.push({ ok: false, message: (err as Error).message });
           }
         }
-        return { results, totalDurationMs: Number((performance.now() - t0).toFixed(2)) };
+        const firstErr = entries.find((e) => !e.ok);
+        if (firstErr && !firstErr.ok) {
+          throw new ApiError(400, "sql_error", firstErr.message);
+        }
+        return {
+          results: entries.map((e) => (e as { ok: true; result: RawExecResult }).result),
+          totalDurationMs: Number((performance.now() - t0).toFixed(2)),
+        };
+      },
+
+      async batch(target, steps) {
+        const db = getSqlite(target.id);
+        const t0 = performance.now();
+        const outcomes: HranaBatchStepOutcome[] = [];
+        for (const step of steps) {
+          const shouldRun = evaluateBatchCondition(step.condition, outcomes, () => !db.inTransaction);
+          if (!shouldRun) {
+            outcomes.push({ result: null, error: null });
+            continue;
+          }
+          try {
+            const result = execOneSqliteStmt(db, step.stmt);
+            outcomes.push({ result, error: null });
+          } catch (err) {
+            outcomes.push({
+              result: null,
+              error: { message: (err as Error).message },
+            });
+          }
+        }
+        return {
+          outcomes,
+          totalDurationMs: Number((performance.now() - t0).toFixed(2)),
+        };
       },
     },
   };
@@ -499,4 +547,316 @@ describe("Phase 1: Schema, Query & Table Rows API + Auth", () => {
     expect(res.status).toBe(408);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("query_timeout");
   });
+
+  test("B1: insert, update, and delete are all-or-nothing when the 2nd row fails (NOT NULL / FK violation)", async () => {
+    const app = buildApp("tok");
+    const headers = {
+      authorization: "Bearer tok",
+      "content-type": "application/json",
+    };
+
+    // Setup parent + child tables with NOT NULL and ON DELETE RESTRICT FK
+    const setupRes = await app.request(`/api/databases/${dbId}/query`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sql: `
+          CREATE TABLE parent (id INTEGER PRIMARY KEY, label TEXT NOT NULL);
+          CREATE TABLE child (
+            id INTEGER PRIMARY KEY,
+            parent_id INTEGER NOT NULL REFERENCES parent(id) ON DELETE RESTRICT,
+            note TEXT NOT NULL
+          );
+          INSERT INTO parent (id, label) VALUES (10, 'p10'), (20, 'p20');
+          INSERT INTO child (id, parent_id, note) VALUES (1, 20, 'linked-to-20');
+        `,
+        readOnly: false,
+      }),
+    });
+    expect(setupRes.status).toBe(200);
+
+    // 1. Insert 2 rows where the 2nd violates NOT NULL -> 400 and 1st row is rolled back
+    const insFail = await app.request(`/api/databases/${dbId}/tables/parent/rows`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        rows: [
+          { id: 30, label: "should-be-rolled-back" },
+          { id: 40, label: null },
+        ],
+      }),
+    });
+    expect(insFail.status).toBe(400);
+    const afterIns = await app.request(`/api/databases/${dbId}/tables/parent/rows`, { headers });
+    const afterInsRows = ((await afterIns.json()) as { rows: { id: number; label: string }[] }).rows;
+    expect(afterInsRows).toEqual([
+      { id: 10, label: "p10" },
+      { id: 20, label: "p20" },
+    ]);
+
+    // 2. Update 2 rows where the 2nd violates NOT NULL or FK -> 400 and 1st update is rolled back
+    const updFail = await app.request(`/api/databases/${dbId}/tables/parent/rows`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        updates: [
+          { pk: { id: 10 }, values: { label: "mutated-10" } },
+          { pk: { id: 20 }, values: { label: null } },
+        ],
+      }),
+    });
+    expect(updFail.status).toBe(400);
+    const afterUpd = await app.request(`/api/databases/${dbId}/tables/parent/rows`, { headers });
+    const afterUpdRows = ((await afterUpd.json()) as { rows: { id: number; label: string }[] }).rows;
+    expect(afterUpdRows).toEqual([
+      { id: 10, label: "p10" },
+      { id: 20, label: "p20" },
+    ]);
+
+    // 3. Delete 2 rows where the 2nd violates FK (id=20 is referenced by child) -> 400 and id=10 is NOT deleted
+    const delFail = await app.request(`/api/databases/${dbId}/tables/parent/rows`, {
+      method: "DELETE",
+      headers,
+      body: JSON.stringify({
+        pks: [{ id: 10 }, { id: 20 }],
+      }),
+    });
+    expect(delFail.status).toBe(400);
+    const afterDel = await app.request(`/api/databases/${dbId}/tables/parent/rows`, { headers });
+    const afterDelRows = ((await afterDel.json()) as { rows: { id: number; label: string }[] }).rows;
+    expect(afterDelRows).toEqual([
+      { id: 10, label: "p10" },
+      { id: 20, label: "p20" },
+    ]);
+  });
+
+  test("B1: write-mode SQL script stops at first failing statement, rolls back open user tx, and reports which statement failed & which were not executed", async () => {
+    const app = buildApp("tok");
+    const headers = {
+      authorization: "Bearer tok",
+      "content-type": "application/json",
+    };
+
+    await app.request(`/api/databases/${dbId}/query`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sql: `
+          CREATE TABLE x (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+          INSERT INTO x (id, name) VALUES (1, 'one'), (2, 'two');
+        `,
+        readOnly: false,
+      }),
+    });
+
+    // Script with an error at statement index 1 (2nd statement) followed by DROP TABLE x
+    const midFail = await app.request(`/api/databases/${dbId}/query`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sql: `
+          DELETE FROM x WHERE id = 1;
+          SELECT * FROM missing_table_xyz;
+          DROP TABLE x;
+        `,
+        readOnly: false,
+      }),
+    });
+    expect(midFail.status).toBe(400);
+    const midBody = (await midFail.json()) as {
+      error: { code: string; message: string };
+      failedStatementIndex: number;
+      executedStatements: string[];
+      notExecutedStatements: string[];
+      results: { index: number; statement: string; status: string; error: string | null; rowsAffected: number }[];
+    };
+    expect(midBody.error.code).toBe("sql_error");
+    expect(midBody.error.message).toContain("Statement 2 (index 1) failed");
+    expect(midBody.error.message).toContain("missing_table_xyz");
+    expect(midBody.failedStatementIndex).toBe(1);
+    expect(midBody.executedStatements).toEqual(["DELETE FROM x WHERE id = 1"]);
+    expect(midBody.notExecutedStatements).toEqual(["DROP TABLE x"]);
+    expect(midBody.results).toHaveLength(3);
+    expect(midBody.results[0]!.status).toBe("ok");
+    expect(midBody.results[0]!.rowsAffected).toBe(1);
+    expect(midBody.results[1]!.status).toBe("error");
+    expect(midBody.results[1]!.error).toContain("missing_table_xyz");
+    expect(midBody.results[2]!.status).toBe("not_executed");
+    expect(midBody.results[2]!.error).toBe("not executed");
+
+    // Verify DROP TABLE x did NOT run (table x still exists with row 2)
+    const checkX = await app.request(`/api/databases/${dbId}/tables/x/rows`, { headers });
+    expect(checkX.status).toBe(200);
+    expect(((await checkX.json()) as { rows: { id: number; name: string }[] }).rows).toEqual([
+      { id: 2, name: "two" },
+    ]);
+
+    // Also test when user opens an explicit BEGIN transaction and a step fails mid-transaction:
+    // the open transaction is rolled back automatically.
+    const txFail = await app.request(`/api/databases/${dbId}/query`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sql: `
+          BEGIN;
+          INSERT INTO x (id, name) VALUES (3, 'three');
+          INSERT INTO x (id, name) VALUES (4, NULL);
+          COMMIT;
+        `,
+        readOnly: false,
+      }),
+    });
+    expect(txFail.status).toBe(400);
+    const txBody = (await txFail.json()) as {
+      failedStatementIndex: number;
+      results: { status: string; error: string | null }[];
+    };
+    expect(txBody.failedStatementIndex).toBe(2);
+    expect(txBody.results[0]!.status).toBe("ok");
+    expect(txBody.results[1]!.status).toBe("ok");
+    expect(txBody.results[2]!.status).toBe("error");
+    expect(txBody.results[3]!.status).toBe("not_executed");
+    expect(txBody.results[3]!.error).toBe("not executed");
+
+    // Row 3 was rolled back because the open BEGIN transaction was rolled back on failure
+    const afterTxFail = await app.request(`/api/databases/${dbId}/tables/x/rows`, { headers });
+    expect(((await afterTxFail.json()) as { rows: { id: number; name: string }[] }).rows).toEqual([
+      { id: 2, name: "two" },
+    ]);
+  });
+});
+
+const sqldPath = path.resolve(import.meta.dir, "../../../../bin/sqld");
+
+describe("B1 opt-in integration against real bin/sqld", () => {
+  test.skipIf(!existsSync(sqldPath))(
+    "real sqld: partial-commit reproduction is prevented on insertTableRows, updateTableRows, deleteTableRows, and write-mode runSqlQuery",
+    async () => {
+      const tmp = mkdtempSync(path.join(tmpdir(), "sqlitend-real-sqld-b1-"));
+      const meta = openMetadata(path.join(tmp, "metadata.sqlite"));
+      const config = loadConfig(
+        {
+          SQLITEND_DATA_ROOT: tmp,
+          SQLITEND_HOST: "127.0.0.1",
+          SQLITEND_ADMIN_TOKEN: "real-sqld-tok",
+          SQLITEND_SQLD_PATH: sqldPath,
+        },
+        { portRange: { start: 46501, end: 46520 } },
+      );
+      const supervisor = new Supervisor({ config, databases: meta.databases });
+      const sampler = new Sampler(60_000, tmp);
+      const authService = new AuthService(meta.auth);
+      const app = createRoutes({
+        config,
+        workspaces: meta.workspaces,
+        databases: meta.databases,
+        tokens: meta.tokens,
+        supervisor,
+        sampler,
+        sqldOk: true,
+        sqldVersion: "0.24.32",
+        version: "0.1.4-test",
+        auth: {
+          service: authService,
+          repo: meta.auth,
+          adminToken: config.adminToken,
+        },
+      });
+      const headers = {
+        authorization: "Bearer real-sqld-tok",
+        "content-type": "application/json",
+      };
+
+      try {
+        const wsRes = await app.request("/api/workspaces", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ name: "RealSqldWs" }),
+        });
+        expect(wsRes.status).toBe(201);
+        const ws = (await wsRes.json()) as { id: string };
+
+        const dbRes = await app.request(`/api/workspaces/${ws.id}/databases`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ name: "RealSqldDb" }),
+        });
+        expect(dbRes.status).toBe(201);
+        const db = (await dbRes.json()) as { id: string };
+
+        // Create table t(id INTEGER PRIMARY KEY, v TEXT NOT NULL)
+        const createRes = await app.request(`/api/databases/${db.id}/query`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            sql: "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL);",
+            readOnly: false,
+          }),
+        });
+        expect(createRes.status).toBe(200);
+
+        // Attempt to insert 2 rows where row 2 violates NOT NULL
+        const insRes = await app.request(`/api/databases/${db.id}/tables/t/rows`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            rows: [
+              { id: 1, v: "a" },
+              { id: 2, v: null },
+            ],
+          }),
+        });
+        expect(insRes.status).toBe(400);
+
+        // Verify SELECT * FROM t is empty ([]) — row 1 was NOT committed!
+        const selectRes = await app.request(`/api/databases/${db.id}/query`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ sql: "SELECT * FROM t" }),
+        });
+        expect(selectRes.status).toBe(200);
+        const selectBody = (await selectRes.json()) as { results: { rows: unknown[][] }[] };
+        expect(selectBody.results[0]!.rows).toEqual([]);
+
+        // Verify write-mode script with error in the middle stops and rolls back open BEGIN tx
+        const scriptRes = await app.request(`/api/databases/${db.id}/query`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            sql: `
+              BEGIN;
+              INSERT INTO t (id, v) VALUES (10, 'ten');
+              INSERT INTO t (id, v) VALUES (20, NULL);
+              DROP TABLE t;
+            `,
+            readOnly: false,
+          }),
+        });
+        expect(scriptRes.status).toBe(400);
+        const scriptBody = (await scriptRes.json()) as {
+          failedStatementIndex: number;
+          results: { status: string; error: string | null }[];
+        };
+        expect(scriptBody.failedStatementIndex).toBe(2);
+        expect(scriptBody.results[0]!.status).toBe("ok");
+        expect(scriptBody.results[1]!.status).toBe("ok");
+        expect(scriptBody.results[2]!.status).toBe("error");
+        expect(scriptBody.results[3]!.status).toBe("not_executed");
+        expect(scriptBody.results[3]!.error).toBe("not executed");
+
+        // Table t still exists and has 0 rows
+        const checkAfter = await app.request(`/api/databases/${db.id}/query`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ sql: "SELECT * FROM t" }),
+        });
+        expect(checkAfter.status).toBe(200);
+        expect(((await checkAfter.json()) as { results: { rows: unknown[][] }[] }).results[0]!.rows).toEqual([]);
+      } finally {
+        await supervisor.shutdown();
+        meta.db.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 });

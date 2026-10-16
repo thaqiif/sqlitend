@@ -30,13 +30,49 @@ import { ApiError } from "../http/routes.ts";
 import { dirBytes, walDirBytes } from "../metrics/sampler.ts";
 
 export interface HranaPipelineReq {
-  type: "execute" | "close";
+  type: "execute" | "batch" | "close";
   stmt?: {
     sql: string;
     args?: HranaValue[];
     named_args?: { name: string; value: HranaValue }[];
     want_rows?: boolean;
   };
+  batch?: {
+    steps: {
+      condition?: HranaBatchCond;
+      stmt: {
+        sql: string;
+        args?: HranaValue[];
+        named_args?: { name: string; value: HranaValue }[];
+        want_rows?: boolean;
+      };
+    }[];
+  };
+}
+
+export type HranaBatchCond =
+  | { type: "ok"; step: number }
+  | { type: "error"; step: number }
+  | { type: "not"; cond: HranaBatchCond }
+  | { type: "and"; conds: HranaBatchCond[] }
+  | { type: "or"; conds: HranaBatchCond[] }
+  | { type: "is_autocommit" };
+
+export interface HranaBatchStep {
+  condition?: HranaBatchCond;
+  stmt: {
+    sql: string;
+    args?: SqlValue[];
+    namedArgs?: Record<string, SqlValue>;
+    wantRows?: boolean;
+  };
+}
+
+export interface HranaBatchStepOutcome {
+  /** Non-null when the step executed and succeeded. */
+  result: RawExecResult | null;
+  /** Non-null when the step executed and failed. */
+  error: { message: string; code?: string } | null;
 }
 
 export type HranaValue =
@@ -51,13 +87,19 @@ export interface HranaStmtResult {
   rows: HranaValue[][];
   affected_row_count: number;
   last_insert_rowid: string | null;
+  query_duration_ms?: number;
+}
+
+export interface HranaBatchResult {
+  step_results: (HranaStmtResult | null)[];
+  step_errors: ({ message: string; code?: string } | null)[];
 }
 
 export interface HranaPipelineEntry {
   type: "ok" | "error";
   response?: {
-    type: "execute" | "close";
-    result?: HranaStmtResult;
+    type: "execute" | "batch" | "close";
+    result?: HranaStmtResult & HranaBatchResult;
   };
   error?: {
     message: string;
@@ -81,12 +123,57 @@ export interface RawExecResult {
 }
 
 export interface HranaExecutor {
-  /** Execute a batch of statements in a single Hrana pipeline call. */
+  /** Execute statements in a Hrana pipeline call (where sqld does NOT stop on error). */
   pipeline(
     db: { id: string; slug: string; port: number },
     stmts: { sql: string; args?: SqlValue[]; namedArgs?: Record<string, SqlValue>; wantRows?: boolean }[],
     opts?: { timeoutMs?: number },
   ): Promise<{ results: RawExecResult[]; totalDurationMs: number }>;
+
+  /** Execute conditional steps in a Hrana batch call (`{"type":"batch","batch":{"steps":[...]}}`). */
+  batch(
+    db: { id: string; slug: string; port: number },
+    steps: HranaBatchStep[],
+    opts?: { timeoutMs?: number },
+  ): Promise<{ outcomes: HranaBatchStepOutcome[]; totalDurationMs: number }>;
+}
+
+export function conditionUsesIsAutocommit(cond: HranaBatchCond | undefined): boolean {
+  if (!cond) return false;
+  if (cond.type === "is_autocommit") return true;
+  if (cond.type === "not") return conditionUsesIsAutocommit(cond.cond);
+  if (cond.type === "and" || cond.type === "or") return cond.conds.some(conditionUsesIsAutocommit);
+  return false;
+}
+
+/**
+ * Evaluate a Hrana BatchCond against previously executed step outcomes and
+ * current connection autocommit state (per `@libsql/hrana-client` spec).
+ */
+export function evaluateBatchCondition(
+  cond: HranaBatchCond | undefined,
+  outcomes: HranaBatchStepOutcome[],
+  isAutocommit: () => boolean,
+): boolean {
+  if (!cond) return true;
+  switch (cond.type) {
+    case "ok": {
+      const target = outcomes[cond.step];
+      return target !== undefined && target.result !== null && target.error === null;
+    }
+    case "error": {
+      const target = outcomes[cond.step];
+      return target !== undefined && target.error !== null;
+    }
+    case "not":
+      return !evaluateBatchCondition(cond.cond, outcomes, isAutocommit);
+    case "and":
+      return cond.conds.every((c) => evaluateBatchCondition(c, outcomes, isAutocommit));
+    case "or":
+      return cond.conds.some((c) => evaluateBatchCondition(c, outcomes, isAutocommit));
+    case "is_autocommit":
+      return isAutocommit();
+  }
 }
 
 /** Optional observer hook so Phase 3 metrics can record every query's latency & error state. */
@@ -226,6 +313,123 @@ export function createHttpHranaExecutor(
         isWrite: out.some((x) => x.rowsAffected > 0),
       });
       return { results: out, totalDurationMs };
+    },
+
+    async batch(db, steps, callOpts = {}) {
+      const timeoutMs = callOpts.timeoutMs ?? 10_000;
+      const token = await getInternalToken(dataRoot, db.id, db.slug);
+      const wireSteps = steps.map((s) => ({
+        ...(s.condition ? { condition: s.condition } : {}),
+        stmt: {
+          sql: s.stmt.sql,
+          ...(s.stmt.args && s.stmt.args.length > 0 ? { args: s.stmt.args.map(toHranaValue) } : {}),
+          ...(s.stmt.namedArgs
+            ? {
+                named_args: Object.entries(s.stmt.namedArgs).map(([name, value]) => ({
+                  name: name.replace(/^[:@$]/, ""),
+                  value: toHranaValue(value),
+                })),
+              }
+            : {}),
+          want_rows: s.stmt.wantRows ?? true,
+        },
+      }));
+      const requests: HranaPipelineReq[] = [
+        { type: "batch", batch: { steps: wireSteps } },
+        { type: "close" },
+      ];
+
+      // BatchCond `is_autocommit` requires Hrana v3 (`/v3/pipeline` on sqld 0.24+).
+      const usesV3 = steps.some((s) => conditionUsesIsAutocommit(s.condition));
+      const endpointPath = usesV3 ? "/v3/pipeline" : "/v2/pipeline";
+
+      const t0 = performance.now();
+      let res: Response;
+      try {
+        res = await doFetch(`http://${host}:${db.port}${endpointPath}`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ requests }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (err) {
+        const elapsed = performance.now() - t0;
+        opts.onQuery?.({ dbId: db.id, durationMs: elapsed, ok: false, isWrite: false });
+        if ((err as Error).name === "TimeoutError" || (err as Error).name === "AbortError") {
+          throw new ApiError(408, "query_timeout", `query timed out after ${timeoutMs}ms`);
+        }
+        throw new ApiError(502, "sqld_unreachable", `could not reach database process on port ${db.port}`);
+      }
+
+      if (!res.ok) {
+        const elapsed = performance.now() - t0;
+        opts.onQuery?.({ dbId: db.id, durationMs: elapsed, ok: false, isWrite: false });
+        const text = (await res.text().catch(() => "")).slice(0, 500);
+        throw new ApiError(502, "sqld_error", `sqld HTTP ${res.status}`, text || undefined);
+      }
+
+      const body = (await res.json()) as HranaPipelineResponse;
+      const totalDurationMs = Number((performance.now() - t0).toFixed(2));
+      const perStmtMs = steps.length > 0 ? Number((totalDurationMs / steps.length).toFixed(2)) : 0;
+
+      const entry = body.results?.[0];
+      if (!entry) {
+        opts.onQuery?.({ dbId: db.id, durationMs: totalDurationMs, ok: false, isWrite: false });
+        throw new ApiError(502, "sqld_error", "incomplete batch response from sqld");
+      }
+      if (entry.type === "error") {
+        opts.onQuery?.({ dbId: db.id, durationMs: totalDurationMs, ok: false, isWrite: false });
+        const msg = entry.error?.message ?? "SQL batch execution failed";
+        throw new ApiError(400, "sql_error", msg, entry.error?.code);
+      }
+
+      const batchRes = entry.response?.result;
+      if (!batchRes || !Array.isArray(batchRes.step_results) || !Array.isArray(batchRes.step_errors)) {
+        opts.onQuery?.({ dbId: db.id, durationMs: totalDurationMs, ok: false, isWrite: false });
+        throw new ApiError(502, "sqld_error", "malformed batch response from sqld");
+      }
+
+      const outcomes: HranaBatchStepOutcome[] = [];
+      for (let i = 0; i < steps.length; i++) {
+        const sr = batchRes.step_results[i] ?? null;
+        const se = batchRes.step_errors[i] ?? null;
+        if (sr !== null) {
+          outcomes.push({
+            result: {
+              columns: sr.cols.map((c) => c.name ?? ""),
+              columnTypes: sr.cols.map((c) => c.decltype ?? null),
+              rows: sr.rows.map((row) => row.map(fromHranaValue)),
+              rowsAffected: sr.affected_row_count ?? 0,
+              lastInsertRowid: sr.last_insert_rowid ?? null,
+              durationMs:
+                typeof sr.query_duration_ms === "number" ? Number(sr.query_duration_ms.toFixed(2)) : perStmtMs,
+            },
+            error: null,
+          });
+        } else if (se !== null) {
+          outcomes.push({
+            result: null,
+            error: {
+              message: se.message ?? "SQL execution failed",
+              ...(se.code ? { code: se.code } : {}),
+            },
+          });
+        } else {
+          outcomes.push({ result: null, error: null });
+        }
+      }
+
+      const hasErr = outcomes.some((o) => o.error !== null);
+      opts.onQuery?.({
+        dbId: db.id,
+        durationMs: totalDurationMs,
+        ok: !hasErr,
+        isWrite: outcomes.some((o) => (o.result?.rowsAffected ?? 0) > 0),
+      });
+      return { outcomes, totalDurationMs };
     },
   };
 }
@@ -442,45 +646,156 @@ export async function runSqlQuery(
   const posArgs = Array.isArray(req.params) ? req.params : undefined;
   const namedArgs = req.params && !Array.isArray(req.params) ? req.params : undefined;
 
-  // When readOnly is true, wrap the pipeline in PRAGMA query_only = ON / OFF
-  // so SQLite itself enforces read-only execution at the engine level.
-  const pipelineStmts: { sql: string; args?: SqlValue[]; namedArgs?: Record<string, SqlValue>; wantRows?: boolean }[] = [];
+  // Execute via a Hrana `batch` with step conditions so execution stops at the
+  // first failing statement:
+  //   • readOnly = true:
+  //       step 0: BEGIN DEFERRED
+  //       step i (1..M): statements[i-1], conditioned on { type: "ok", step: i - 1 }
+  //       step M+1: ROLLBACK, conditioned on { type: "ok", step: 0 }
+  //   • readOnly = false:
+  //       no implicit transaction (the user may write their own BEGIN/COMMIT),
+  //       step i (0..M-1): statements[i], conditioned on { type: "ok", step: i - 1 } (for i > 0)
+  //       step M: ROLLBACK conditioned on { type: "and", conds: [{ type: "not", cond: { type: "ok", step: M - 1 } }, { type: "not", cond: { type: "is_autocommit" } }] }
+  //       so if any step fails while a user transaction is open, it is rolled back.
+  const steps: HranaBatchStep[] = [];
   if (readOnly) {
-    pipelineStmts.push({ sql: "PRAGMA query_only = ON", wantRows: false });
-  }
-  for (const s of statements) {
-    pipelineStmts.push({
-      sql: s,
-      ...( statements.length === 1 && posArgs ? { args: posArgs } : {}),
-      ...( statements.length === 1 && namedArgs ? { namedArgs } : {}),
-      wantRows: true,
+    steps.push({ stmt: { sql: "BEGIN DEFERRED", wantRows: false } });
+    for (let i = 0; i < statements.length; i++) {
+      steps.push({
+        condition: { type: "ok", step: i },
+        stmt: {
+          sql: statements[i]!,
+          ...(statements.length === 1 && posArgs ? { args: posArgs } : {}),
+          ...(statements.length === 1 && namedArgs ? { namedArgs } : {}),
+          wantRows: true,
+        },
+      });
+    }
+    steps.push({
+      condition: { type: "ok", step: 0 },
+      stmt: { sql: "ROLLBACK", wantRows: false },
+    });
+  } else {
+    for (let i = 0; i < statements.length; i++) {
+      steps.push({
+        ...(i > 0 ? { condition: { type: "ok", step: i - 1 } } : {}),
+        stmt: {
+          sql: statements[i]!,
+          ...(statements.length === 1 && posArgs ? { args: posArgs } : {}),
+          ...(statements.length === 1 && namedArgs ? { namedArgs } : {}),
+          wantRows: true,
+        },
+      });
+    }
+    steps.push({
+      condition: {
+        type: "and",
+        conds: [
+          { type: "not", cond: { type: "ok", step: statements.length - 1 } },
+          { type: "not", cond: { type: "is_autocommit" } },
+        ],
+      },
+      stmt: { sql: "ROLLBACK", wantRows: false },
     });
   }
-  if (readOnly) {
-    pipelineStmts.push({ sql: "PRAGMA query_only = OFF", wantRows: false });
-  }
 
-  const { results: rawResults, totalDurationMs } = await executor.pipeline(db, pipelineStmts, {
+  const { outcomes, totalDurationMs } = await executor.batch(db, steps, {
     timeoutMs: req.timeoutMs ?? 10_000,
   });
 
-  const userResults = readOnly ? rawResults.slice(1, 1 + statements.length) : rawResults;
+  if (readOnly && outcomes[0]?.error) {
+    throw new ApiError(400, "sql_error", outcomes[0].error.message, outcomes[0].error.code);
+  }
+
+  const userOutcomes = readOnly
+    ? outcomes.slice(1, 1 + statements.length)
+    : outcomes.slice(0, statements.length);
   const limit = Math.min(10_000, Math.max(1, req.limit ?? 1000));
 
-  const results: StatementResult[] = userResults.map((r, idx) => {
-    const truncated = r.rows.length > limit;
-    const rows = truncated ? r.rows.slice(0, limit) : r.rows;
+  let failedIdx = -1;
+  let failedError: { message: string; code?: string } | null = null;
+
+  const results: StatementResult[] = userOutcomes.map((o, idx) => {
+    if (o.result !== null) {
+      const r = o.result;
+      const truncated = r.rows.length > limit;
+      const rows = truncated ? r.rows.slice(0, limit) : r.rows;
+      return {
+        index: idx,
+        statement: statements[idx]!,
+        status: "ok",
+        error: null,
+        columns: r.columns,
+        columnTypes: r.columnTypes,
+        rows,
+        rowsAffected: r.rowsAffected,
+        lastInsertRowid: r.lastInsertRowid,
+        durationMs: r.durationMs,
+        truncated,
+      };
+    }
+    if (o.error !== null) {
+      if (failedIdx === -1) {
+        failedIdx = idx;
+        failedError = o.error;
+      }
+      return {
+        index: idx,
+        statement: statements[idx]!,
+        status: "error",
+        error: o.error.message,
+        columns: [],
+        columnTypes: [],
+        rows: [],
+        rowsAffected: 0,
+        lastInsertRowid: null,
+        durationMs: 0,
+        truncated: false,
+      };
+    }
     return {
+      index: idx,
       statement: statements[idx]!,
-      columns: r.columns,
-      columnTypes: r.columnTypes,
-      rows,
-      rowsAffected: r.rowsAffected,
-      lastInsertRowid: r.lastInsertRowid,
-      durationMs: r.durationMs,
-      truncated,
+      status: "not_executed",
+      error: "not executed",
+      columns: [],
+      columnTypes: [],
+      rows: [],
+      rowsAffected: 0,
+      lastInsertRowid: null,
+      durationMs: 0,
+      truncated: false,
     };
   });
+
+  if (failedIdx !== -1 && failedError !== null) {
+    const errInfo: { message: string; code?: string } = failedError;
+    const executedBefore = statements.slice(0, failedIdx);
+    const notExecuted = statements.slice(failedIdx + 1);
+    const summaryParts: string[] = [
+      `Statement ${failedIdx + 1} (index ${failedIdx}) failed: ${errInfo.message}`,
+    ];
+    if (statements.length > 1) {
+      summaryParts.push(
+        executedBefore.length > 0
+          ? `executed before failure (${executedBefore.length}): ${executedBefore.map((s, i) => `[${i}] ${s}`).join("; ")}`
+          : "0 statements executed before failure",
+      );
+      if (notExecuted.length > 0) {
+        summaryParts.push(
+          `not executed (${notExecuted.length}): ${notExecuted.map((s, i) => `[${failedIdx + 1 + i}] ${s}`).join("; ")}`,
+        );
+      }
+    }
+    throw new ApiError(400, "sql_error", summaryParts.join(" | "), errInfo.code, {
+      failedStatementIndex: failedIdx,
+      failedStatement: statements[failedIdx]!,
+      executedStatements: executedBefore,
+      notExecutedStatements: notExecuted,
+      results,
+      totalDurationMs,
+    });
+  }
 
   return { results, totalDurationMs };
 }
@@ -828,6 +1143,51 @@ export async function browseTableRows(
   };
 }
 
+/**
+ * Execute a list of row-mutation statements inside an atomic Hrana `batch`:
+ *   • step 0: BEGIN IMMEDIATE
+ *   • step i (1..N): mutationStmts[i-1], conditioned on `{ type: "ok", step: i - 1 }`
+ *   • step N+1 (commitStep): COMMIT, conditioned on `{ type: "ok", step: N }`
+ *   • step N+2 (rollbackStep): ROLLBACK, conditioned on `{ type: "not", cond: { type: "ok", step: N + 1 } }`
+ */
+async function runTransactionalBatch(
+  executor: HranaExecutor,
+  db: { id: string; slug: string; port: number },
+  mutationStmts: { sql: string; args?: SqlValue[]; wantRows?: boolean }[],
+): Promise<{ execResults: RawExecResult[]; totalDurationMs: number }> {
+  const steps: HranaBatchStep[] = [{ stmt: { sql: "BEGIN IMMEDIATE", wantRows: false } }];
+  for (let i = 0; i < mutationStmts.length; i++) {
+    steps.push({
+      condition: { type: "ok", step: i },
+      stmt: mutationStmts[i]!,
+    });
+  }
+  const commitStepIdx = steps.length;
+  steps.push({
+    condition: { type: "ok", step: commitStepIdx - 1 },
+    stmt: { sql: "COMMIT", wantRows: false },
+  });
+  steps.push({
+    condition: { type: "not", cond: { type: "ok", step: commitStepIdx } },
+    stmt: { sql: "ROLLBACK", wantRows: false },
+  });
+
+  const { outcomes, totalDurationMs } = await executor.batch(db, steps);
+
+  for (let i = 0; i <= commitStepIdx; i++) {
+    const o = outcomes[i];
+    if (o?.error) {
+      throw new ApiError(400, "sql_error", o.error.message, o.error.code);
+    }
+  }
+  if (!outcomes[commitStepIdx]?.result) {
+    throw new ApiError(400, "sql_error", "transaction was rolled back");
+  }
+
+  const execResults = outcomes.slice(1, 1 + mutationStmts.length).map((o) => o.result!);
+  return { execResults, totalDurationMs };
+}
+
 export async function insertTableRows(
   executor: HranaExecutor,
   db: { id: string; slug: string; port: number },
@@ -840,9 +1200,7 @@ export async function insertTableRows(
   }
   const colSet = new Set(meta.columns.map((c) => c.name));
 
-  const stmts: { sql: string; args?: SqlValue[]; wantRows?: boolean }[] = [
-    { sql: "BEGIN IMMEDIATE", wantRows: false },
-  ];
+  const mutationStmts: { sql: string; args?: SqlValue[]; wantRows?: boolean }[] = [];
 
   for (const row of req.rows) {
     const keys = Object.keys(row);
@@ -852,22 +1210,20 @@ export async function insertTableRows(
       }
     }
     if (keys.length === 0) {
-      stmts.push({ sql: `INSERT INTO ${quoteIdent(meta.name)} DEFAULT VALUES`, wantRows: false });
+      mutationStmts.push({ sql: `INSERT INTO ${quoteIdent(meta.name)} DEFAULT VALUES`, wantRows: false });
     } else {
       const colsSql = keys.map(quoteIdent).join(", ");
       const placeholders = keys.map(() => "?").join(", ");
       const vals = keys.map((k) => row[k] ?? null);
-      stmts.push({
+      mutationStmts.push({
         sql: `INSERT INTO ${quoteIdent(meta.name)} (${colsSql}) VALUES (${placeholders})`,
         args: vals,
         wantRows: false,
       });
     }
   }
-  stmts.push({ sql: "COMMIT", wantRows: false });
 
-  const { results, totalDurationMs } = await executor.pipeline(db, stmts);
-  const execResults = results.slice(1, 1 + req.rows.length);
+  const { execResults, totalDurationMs } = await runTransactionalBatch(executor, db, mutationStmts);
   const affected = execResults.reduce((acc, r) => acc + r.rowsAffected, 0);
   const lastInsertRowid = execResults.at(-1)?.lastInsertRowid ?? null;
 
@@ -886,9 +1242,7 @@ export async function updateTableRows(
   }
   const colSet = new Set(meta.columns.map((c) => c.name));
 
-  const stmts: { sql: string; args?: SqlValue[]; wantRows?: boolean }[] = [
-    { sql: "BEGIN IMMEDIATE", wantRows: false },
-  ];
+  const mutationStmts: { sql: string; args?: SqlValue[]; wantRows?: boolean }[] = [];
 
   for (const item of req.updates) {
     const pkEntries = Object.entries(item.pk);
@@ -924,16 +1278,14 @@ export async function updateTableRows(
       }
     }
 
-    stmts.push({
+    mutationStmts.push({
       sql: `UPDATE ${quoteIdent(meta.name)} SET ${setSql} WHERE ${whereParts.join(" AND ")}`,
       args: [...setArgs, ...whereArgs],
       wantRows: false,
     });
   }
 
-  stmts.push({ sql: "COMMIT", wantRows: false });
-  const { results, totalDurationMs } = await executor.pipeline(db, stmts);
-  const execResults = results.slice(1, 1 + req.updates.length);
+  const { execResults, totalDurationMs } = await runTransactionalBatch(executor, db, mutationStmts);
   const affected = execResults.reduce((acc, r) => acc + r.rowsAffected, 0);
 
   return { affected, durationMs: totalDurationMs };
@@ -950,9 +1302,7 @@ export async function deleteTableRows(
     throw new ApiError(400, "bad_request", `cannot delete from view "${meta.name}"`);
   }
 
-  const stmts: { sql: string; args?: SqlValue[]; wantRows?: boolean }[] = [
-    { sql: "BEGIN IMMEDIATE", wantRows: false },
-  ];
+  const mutationStmts: { sql: string; args?: SqlValue[]; wantRows?: boolean }[] = [];
 
   for (const pk of req.pks) {
     const pkEntries = Object.entries(pk);
@@ -976,16 +1326,14 @@ export async function deleteTableRows(
       }
     }
 
-    stmts.push({
+    mutationStmts.push({
       sql: `DELETE FROM ${quoteIdent(meta.name)} WHERE ${whereParts.join(" AND ")}`,
       args: whereArgs,
       wantRows: false,
     });
   }
 
-  stmts.push({ sql: "COMMIT", wantRows: false });
-  const { results, totalDurationMs } = await executor.pipeline(db, stmts);
-  const execResults = results.slice(1, 1 + req.pks.length);
+  const { execResults, totalDurationMs } = await runTransactionalBatch(executor, db, mutationStmts);
   const affected = execResults.reduce((acc, r) => acc + r.rowsAffected, 0);
 
   return { affected, durationMs: totalDurationMs };

@@ -109,6 +109,13 @@ export default function SqlConsoleTab({ dbId, tables, onSchemaMayHaveChanged }: 
     } catch (err) {
       const msg = err instanceof ApiError ? (err.detail ? `${err.message}: ${err.detail}` : err.message) : (err as Error).message;
       setError(msg);
+      if (err instanceof ApiError && Array.isArray(err.body?.results)) {
+        const partialResults = err.body.results as StatementResult[];
+        const totalDurationMs = typeof err.body.totalDurationMs === "number" ? err.body.totalDurationMs : 0;
+        const failedIdx = typeof err.body.failedStatementIndex === "number" ? err.body.failedStatementIndex : 0;
+        setResponse({ results: partialResults, totalDurationMs });
+        setActiveStmtIdx(failedIdx);
+      }
       const nextHistory: HistoryEntry[] = [
         {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -309,7 +316,15 @@ export default function SqlConsoleTab({ dbId, tables, onSchemaMayHaveChanged }: 
                   className={`stmt-tab ${i === activeStmtIdx ? "active" : ""}`}
                   onClick={() => setActiveStmtIdx(i)}
                 >
-                  Stmt #{i + 1} ({r.columns.length > 0 ? `${r.rows.length} rows` : `${r.rowsAffected} affected`})
+                  Stmt #{i + 1} (
+                  {r.status === "error"
+                    ? "error"
+                    : r.status === "not_executed"
+                      ? "not executed"
+                      : r.columns.length > 0
+                        ? `${r.rows.length} rows`
+                        : `${r.rowsAffected} affected`}
+                  )
                 </button>
               ))}
             </div>
@@ -334,7 +349,19 @@ export default function SqlConsoleTab({ dbId, tables, onSchemaMayHaveChanged }: 
           </div>
 
           {activeResult && (
-            activeResult.columns.length > 0 ? (
+            activeResult.status === "error" ? (
+              <div className="empty-state compact">
+                <p>
+                  <strong>Statement #{activeStmtIdx + 1} failed:</strong> {activeResult.error ?? "SQL error"}
+                </p>
+              </div>
+            ) : activeResult.status === "not_executed" ? (
+              <div className="empty-state compact">
+                <p>
+                  Statement #{activeStmtIdx + 1} was <strong>not executed</strong> because an earlier statement failed.
+                </p>
+              </div>
+            ) : activeResult.columns.length > 0 ? (
               <VirtualResultTable
                 columns={activeResult.columns}
                 rows={activeResult.rows}

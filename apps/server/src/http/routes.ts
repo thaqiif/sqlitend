@@ -142,14 +142,19 @@ export class ApiError extends Error {
   status: number;
   code: string;
   detail?: string;
-  constructor(status: number, code: string, message: string, detail?: string) {
+  extra?: Record<string, unknown>;
+  constructor(status: number, code: string, message: string, detail?: string, extra?: Record<string, unknown>) {
     super(message);
     this.status = status;
     this.code = code;
     this.detail = detail;
+    this.extra = extra;
   }
-  body(): ErrorBody {
-    return { error: { code: this.code, message: this.message, ...(this.detail ? { detail: this.detail } : {}) } };
+  body(): ErrorBody & Record<string, unknown> {
+    return {
+      error: { code: this.code, message: this.message, ...(this.detail ? { detail: this.detail } : {}) },
+      ...(this.extra ?? {}),
+    };
   }
 }
 
@@ -240,6 +245,18 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
           try {
             const res = await d.hrana!.pipeline(db, stmts, opts);
             d.sampler.recordQuery(db.id, res.totalDurationMs, true);
+            return res;
+          } catch (err) {
+            d.sampler.recordQuery(db.id, Number((performance.now() - t0).toFixed(2)), false);
+            throw err;
+          }
+        },
+        async batch(db, steps, opts) {
+          const t0 = performance.now();
+          try {
+            const res = await d.hrana!.batch(db, steps, opts);
+            const hasErr = res.outcomes.some((o) => o.error !== null);
+            d.sampler.recordQuery(db.id, res.totalDurationMs, !hasErr);
             return res;
           } catch (err) {
             d.sampler.recordQuery(db.id, Number((performance.now() - t0).toFixed(2)), false);

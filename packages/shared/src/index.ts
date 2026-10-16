@@ -339,8 +339,14 @@ export const QueryRequestSchema = z
   .strict();
 export type QueryRequest = z.infer<typeof QueryRequestSchema>;
 
+export const StatementStatusSchema = z.enum(["ok", "error", "not_executed"]);
+export type StatementStatus = z.infer<typeof StatementStatusSchema>;
+
 export const StatementResultSchema = z.object({
+  index: z.number().int().optional(),
   statement: z.string(),
+  status: StatementStatusSchema.optional().default("ok"),
+  error: z.string().nullable().optional().default(null),
   columns: z.array(z.string()),
   columnTypes: z.array(z.string().nullable()).optional(),
   rows: z.array(z.array(SqlValueSchema)),
