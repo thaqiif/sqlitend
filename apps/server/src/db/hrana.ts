@@ -29,6 +29,7 @@ import { mintToken } from "../auth/tokens.ts";
 import { ApiError } from "../http/routes.ts";
 import { dirBytes, walDirBytes } from "../metrics/sampler.ts";
 
+export type { SqlValue };
 export interface HranaPipelineReq {
   type: "execute" | "batch" | "close";
   stmt?: {
@@ -267,7 +268,11 @@ export function createHttpHranaExecutor(
         const elapsed = performance.now() - t0;
         opts.onQuery?.({ dbId: db.id, durationMs: elapsed, ok: false, isWrite: false });
         if ((err as Error).name === "TimeoutError" || (err as Error).name === "AbortError") {
-          throw new ApiError(408, "query_timeout", `query timed out after ${timeoutMs}ms`);
+          throw new ApiError(
+            408,
+            "query_timeout",
+            `query timed out after ${timeoutMs}ms (HTTP request aborted; sqld has no per-query timeout so the query may still be running inside sqld)`,
+          );
         }
         throw new ApiError(502, "sqld_unreachable", `could not reach database process on port ${db.port}`);
       }
@@ -359,7 +364,11 @@ export function createHttpHranaExecutor(
         const elapsed = performance.now() - t0;
         opts.onQuery?.({ dbId: db.id, durationMs: elapsed, ok: false, isWrite: false });
         if ((err as Error).name === "TimeoutError" || (err as Error).name === "AbortError") {
-          throw new ApiError(408, "query_timeout", `query timed out after ${timeoutMs}ms`);
+          throw new ApiError(
+            408,
+            "query_timeout",
+            `query timed out after ${timeoutMs}ms (HTTP request aborted; sqld has no per-query timeout so the query may still be running inside sqld)`,
+          );
         }
         throw new ApiError(502, "sqld_unreachable", `could not reach database process on port ${db.port}`);
       }

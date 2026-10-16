@@ -545,7 +545,9 @@ describe("Phase 1: Schema, Query & Table Rows API + Auth", () => {
       body: JSON.stringify({ sql: "SELECT 1", timeoutMs: 100 }),
     });
     expect(res.status).toBe(408);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("query_timeout");
+    const errBody = (await res.json()) as { error: { code: string; message: string } };
+    expect(errBody.error.code).toBe("query_timeout");
+    expect(errBody.error.message).toMatch(/may still be running/i);
   });
 
   test("B1: insert, update, and delete are all-or-nothing when the 2nd row fails (NOT NULL / FK violation)", async () => {
