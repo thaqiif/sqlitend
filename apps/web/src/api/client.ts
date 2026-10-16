@@ -3,6 +3,7 @@ import type {
   BackupStatus,
   ControlBackupStatus,
   DatabaseSchemaResponse,
+  DeletePreview,
   DeleteRowsRequest,
   InsertRowsRequest,
   MutateRowsResponse,
@@ -27,6 +28,7 @@ import type {
   TableRowsResponse,
   Token,
   TokenIssued,
+  TrashItem,
   UpdateRowsRequest,
   Workspace,
 } from "@sqlitend/shared";
@@ -102,8 +104,17 @@ export const api = {
   createWorkspace: (body: CreateWorkspace) =>
     request<Workspace>("/workspaces", { method: "POST", body: JSON.stringify(body) }),
 
-  deleteWorkspace: (id: string) =>
-    request<void>(`/workspaces/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  setWorkspaceProtection: (id: string, isProtected: boolean) =>
+    request<Workspace>(`/workspaces/${encodeURIComponent(id)}/protection`, {
+      method: "PATCH",
+      body: JSON.stringify({ protected: isProtected }),
+    }),
+
+  deleteWorkspace: (id: string, confirmSlug: string) =>
+    request<void>(`/workspaces/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ confirm: confirmSlug }),
+    }),
 
   // -------------------------------------------------------------------------
   // Databases
@@ -129,8 +140,34 @@ export const api = {
   syncDns: (id: string) =>
     request<Database>(`/databases/${encodeURIComponent(id)}/dns/sync`, { method: "POST" }),
 
-  deleteDatabase: (id: string) =>
-    request<void>(`/databases/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  setDatabaseProtection: (id: string, isProtected: boolean) =>
+    request<Database>(`/databases/${encodeURIComponent(id)}/protection`, {
+      method: "PATCH",
+      body: JSON.stringify({ protected: isProtected }),
+    }),
+
+  getDeletePreview: (id: string) =>
+    request<DeletePreview>(`/databases/${encodeURIComponent(id)}/delete-preview`),
+
+  deleteDatabase: (id: string, confirmSlug: string) =>
+    request<void>(`/databases/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ confirm: confirmSlug }),
+    }),
+
+  // -------------------------------------------------------------------------
+  // Trash (Soft-Deleted Databases)
+  // -------------------------------------------------------------------------
+  listTrash: () => request<TrashItem[]>("/trash"),
+
+  restoreFromTrash: (id: string) =>
+    request<Database>(`/trash/${encodeURIComponent(id)}/restore`, { method: "POST" }),
+
+  purgeFromTrash: (id: string, confirmSlug: string) =>
+    request<void>(`/trash/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ confirm: confirmSlug }),
+    }),
 
   // -------------------------------------------------------------------------
   // Connection

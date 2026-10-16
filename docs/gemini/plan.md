@@ -379,3 +379,43 @@ Queried directly from npm registry and Bundlephobia on Node/Bun:
    - Enforce `423 protected`, `confirm: "<exact slug>"`, soft-delete move to `<dataRoot>/trash/<id>-<timestamp>` (`assertInside`, kill-before-move, port release), restore (port reallocation), permanent purge, and `SQLITEND_TRASH_DAYS` retention sweep.
    - Remove all inline/list delete buttons; build the Settings "Danger zone", 5s-delayed slug confirmation dialog with size/row-count/last-write preview, and Trash management view.
    - Add benchmark script under `scripts/` to measure query API overhead (<10ms p50) and grid/page performance, update `README.md` and `docs/gemini/plan.md` with final measurements, run all checks, and commit.
+
+---
+
+## 7. Implementation Summary, Measured Numbers & Known Gaps
+
+### What Was Built
+- **Phase 1 — Server Query API & Operator Auth (`ee64d8a`):**
+  - Added `SQLITEND_ADMIN_TOKEN` configuration, non-loopback startup enforcement (`assertStartupAuth`), and SHA-256 constant-time (`crypto.timingSafeEqual`) Bearer/session authentication in `apps/server/src/auth/session.ts` and `auth-routes.ts`.
+  - Implemented `apps/server/src/db/hrana.ts` with in-memory per-DB EdDSA token minting, statement splitting (preserving strings, comments, and `CREATE TRIGGER ... BEGIN ... END`), engine-level `PRAGMA query_only = ON` + token-level read-only enforcement, schema inspection (`GET /api/databases/:id/schema`), SQL execution (`POST /api/databases/:id/query`), and parameterized, identifier-allowlisted table row CRUD (`GET/POST/PATCH/DELETE /api/databases/:id/tables/:table/rows`).
+- **Phase 2 — Web DB Client & Mobile-First UI Redesign (`1d0e08c`):**
+  - Redesigned `apps/web` with a mobile-first shell (`360px` / `600px` / `900px` / `1280px` breakpoints), mobile bottom tab bar (`Databases · Explorer · SQL · Metrics`), slide-over Schema Explorer drawer, light/dark theme toggle, and skeleton shimmer loaders.
+  - Built `DataGridTab.tsx` (`@tanstack/react-table` + `@tanstack/react-virtual` desktop grid + `<600px` mobile row cards + full-record sheet, structured filter chips, inline cell editing, pending-changes SQL review modal, row insert/delete, CSV/JSON copy & export).
+  - Built lazy-loaded `SqlConsoleTab.tsx` (`CodeMirror 6` with live SQLite table/column autocomplete, `Mod+Enter` selection/script execution, read-only default + write toggle + destructive SQL modal, per-statement tabs & timing, 50-entry `localStorage` history, and saved snippets).
+  - Built `StructureTab.tsx` (columns, PK/FK/NOT NULL badges, indexes, foreign keys, and copyable `CREATE` DDL).
+- **Phase 3 — Statistics, History & Stability Metrics (`28cb7eb`):**
+  - Added migration `009_metrics_and_stability.sql` (`metrics_history`, `crash_events`, crash/restart counters) and `MetricsRepo`.
+  - Extended `Sampler` with WAL size calculation, query latency percentile tracking (`p50`/`p95`/`p99`), and ring-buffer persistence/downsampling.
+  - Added `GET /api/databases/:id/metrics/history`, `GET /api/databases/:id/storage`, and `GET /api/metrics/overview`.
+  - Built lazy-loaded `MetricsTab.tsx` (`uPlot` time-series charts, stability banner & rule explanation, `PRAGMA` page/freelist breakdown) and system overview + per-card sparklines on `DatabasesPage.tsx`.
+- **Phase 4 — Hard-to-Delete Workspaces & Databases:**
+  - Added migration `010_protection_and_trash.sql` (`protected` default `1` on workspaces and databases, `trashed_at`, `trash_path`, `last_write_at`).
+  - Enforced `423 protected`, `{ confirm: "<exact slug>" }`, soft-delete move to `<dataRoot>/trash/<id>-<timestamp>` (preserving `killByDbId` before move and `assertInside`), `/api/trash` list/restore/purge, and `SQLITEND_TRASH_DAYS` retention sweep.
+  - Removed all list/card delete buttons; added Workspace & Database **Danger Zone** settings, `DangerConfirmDialog.tsx` (size, table/row count, last write, slug match, 5s countdown), and `TrashPage.tsx`.
+
+### Measured Numbers
+1. **Production Bundle Sizes (`bun run build`):**
+   - Base JS bundle (`dist/assets/index-*.js`): **344.8 KB minified / 101.9 KB gzipped** (Budget: `<= 150 KB gzipped` — **48 KB under budget**).
+   - Lazy SQL Console chunk (`dist/assets/SqlConsoleTab-*.js`): **376.4 KB minified / 124.1 KB gzipped** (loaded only when opening the SQL tab).
+   - Lazy Metrics uPlot chunk (`dist/assets/MetricsTab-*.js`): **60.8 KB minified / 26.0 KB gzipped** (loaded only when opening the Metrics tab).
+   - Base CSS (`dist/assets/index-*.css`): **24.6 KB minified / 5.2 KB gzipped**.
+2. **Server Query & Table Browser Benchmark (`bun run scripts/benchmark-query-api.ts`):**
+   - `POST /api/databases/:id/query` (`SELECT 1`, 200 iterations): **p50 = 0.05 ms**, **p95 = 0.12 ms**, **p99 = 1.39 ms** (Budget: `p50 < 10 ms`).
+   - `GET /api/databases/:id/tables/events/rows` (10,000-row table with sort + offset, 100 iterations): **p50 = 3.70 ms**, **p95 = 4.17 ms**, **p99 = 4.69 ms**.
+3. **End-to-End Killer Workflow (`bun run e2e`):**
+   - Full lifecycle (create workspace, spawn real `sqld`, mint EdDSA token, `@libsql/client` write/read, negative auth check, live `/proc` metrics, 423 protection check, unprotect + soft-delete to trash + permanent purge, stop/start persistence): **~4.2s total** (Budget: `< 60s`).
+
+### Known Gaps / Future Enhancements
+- `WITHOUT ROWID` tables that also lack an explicit primary key (impossible in valid SQLite syntax, as SQLite requires a `PRIMARY KEY` on `WITHOUT ROWID` tables) and read-only `VIEW`s are browseable and filterable in the Data tab with inline editing disabled.
+- Binary `BLOB` columns are rendered as safe base64 summary badges in the JSON query/grid responses; raw binary file upload into a `BLOB` cell is left for a future iteration.
+

@@ -74,11 +74,19 @@ All settings via environment variables (see [`.env.example`](.env.example)):
 - `SQLITEND_DATA_ROOT` – data root (`~/.local/share/sqlitend` default)
 - `SQLITEND_SQLD_PATH` – path to the sqld binary (`<repo>/bin/sqld` default)
 - `SQLITEND_TOKEN_TTL_HOURS` – default token lifetime (1–8760 hours, default `24`)
+- `SQLITEND_TRASH_DAYS` – soft-delete trash retention in days before automatic purge (default `7`)
+- `SQLITEND_ADMIN_TOKEN` – operator token for Bearer or cookie login; required when binding to a non-loopback `SQLITEND_HOST` unless an admin password is already provisioned
 - `SQLITEND_SAMPLE_INTERVAL_MS` – metrics sampler + UI poll interval in MILLISECONDS (250–600000, default `5000`)
 - `SQLITEND_READY_TIMEOUT_MS` – sqld launch ready probe timeout in MILLISECONDS (500–120000, default `10000`)
 - `SQLITEND_GATEWAY_PORT` / `SQLITEND_GATEWAY_HOST` / `SQLITEND_GATEWAY_HOST_TEMPLATE` – optional host-routed gateway giving each database a public HTTPS name such as `https://<db>-libsql.example.com` (off by default; see [`docs/gateway.md`](docs/gateway.md))
 - `SQLITEND_CF_API_TOKEN` / `SQLITEND_CF_ZONE_ID` / `SQLITEND_CF_TUNNEL_ID` – optional: create/remove each database's DNS record in Cloudflare automatically (requires the gateway)
 - `SQLITEND_MAX_BODY_BYTES` – maximum accepted JSON body size for mutating API calls, in bytes (default `1000000`)
+
+### Built-in DB Client, Metrics & Trash Protection
+
+- **Built-in DB Client:** Every running database includes a **Data** tab (virtualized table browser, structured filter chips, inline cell editing with a transactional SQL diff review modal, row insert/delete, CSV/JSON export), a **SQL Console** tab (CodeMirror 6 with live SQLite schema autocomplete, `Ctrl/Cmd+Enter` execution, read-only guard by default, per-statement timing, query history & bookmarks), and a **Structure** tab (columns, PK/FK constraints, indexes, and DDL).
+- **Historical Metrics & Stability Badges:** The `/proc` sampler persists a 7-day ring buffer in `metadata.sqlite`, tracking CPU %, Memory RSS, Disk & WAL size, disk growth rate, query latency percentiles (`p50`/`p95`/`p99`), and 24-hour availability/crash counts with `uPlot` time-series charts.
+- **Delete Protection & Soft-Delete Trash:** Workspaces and databases have `protected = true` by default (`423 protected` on `DELETE`). Deleting requires disabling protection in the **Danger Zone**, waiting out a 5-second confirmation delay, and typing the exact slug. Deleted databases are moved to `<dataRoot>/trash/<id>-<timestamp>` for `SQLITEND_TRASH_DAYS` (default 7 days), where they can be restored in one click or permanently purged.
 
 ### Control-plane access
 

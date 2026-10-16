@@ -1,9 +1,11 @@
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { rm, rmdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, rename, rm, rmdir } from "node:fs/promises";
 import { ZodError } from "zod";
 import {
+  ConfirmSlugDeleteSchema,
   CreateDatabaseSchema,
   CreateTokenSchema,
   CreateWorkspaceSchema,
@@ -12,6 +14,7 @@ import {
   InsertRowsRequestSchema,
   MetricsRangeSchema,
   QueryRequestSchema,
+  SetProtectionSchema,
   TableFilterSchema,
   UpdateRowsRequestSchema,
   type CreateWorkspace,
@@ -19,6 +22,7 @@ import {
   type DatabaseStatus,
   type Database as DatabaseDto,
   type Connection,
+  type DeletePreview,
   type DeleteRowsRequest,
   type ErrorBody,
   type InsertRowsRequest,
@@ -31,6 +35,7 @@ import {
   type StabilityBadge,
   type SystemInfo,
   type TableFilter,
+  type TrashItem,
   type UpdateRowsRequest,
   type Workspace,
 } from "@sqlitend/shared";
@@ -47,14 +52,14 @@ import {
   type HranaExecutor,
 } from "../db/hrana.ts";
 import type { Config } from "../config.ts";
-import type { WorkspacesRepo } from "../db/repos/workspaces.ts";
+import type { WorkspacesRepo, WorkspaceRow } from "../db/repos/workspaces.ts";
 import type { DatabasesRepo, DatabaseRow as DbRow } from "../db/repos/databases.ts";
 import type { MetricsRepo, MetricsHistoryRow } from "../db/repos/metrics.ts";
 import { NameExistsError, SlugExistsError } from "../db/repos/databases.ts";
 import type { TokenRow, TokensRepo } from "../db/repos/tokens.ts";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { Supervisor } from "../supervisor/supervisor.ts";
-import type { Sampler } from "../metrics/sampler.ts";
+import { dirBytes, type Sampler } from "../metrics/sampler.ts";
 import { PortExhaustedError } from "../supervisor/ports.ts";
 import { mintToken, dbKeyRelPath } from "../auth/tokens.ts";
 import { assertInside } from "../util/paths.ts";
@@ -72,9 +77,14 @@ import { maxSlugLength, parseHostTemplate, publicKeyFor, renderHost } from "../g
 // ---------------------------------------------------------------------------
 // DTO mappers (snake_case rows -> camelCase shared DTOs)
 // ---------------------------------------------------------------------------
-type WorkspaceRow = { id: string; slug: string; name: string; created_at: number };
 function rowToWorkspace(r: WorkspaceRow): Workspace {
-  return { id: r.id, slug: r.slug, name: r.name, createdAt: r.created_at };
+  return {
+    id: r.id,
+    slug: r.slug,
+    name: r.name,
+    protected: (r.protected ?? 1) === 1,
+    createdAt: r.created_at,
+  };
 }
 
 /** Read-safe status coercion: a corrupt `status` value in metadata must not
@@ -97,6 +107,9 @@ function rowToDatabase(r: DbRow): Omit<DatabaseDto, "publicUrl"> {
     grpcPort: r.grpc_port,
     dataDir: r.data_dir,
     autoStart: r.auto_start === 1,
+    protected: (r.protected ?? 1) === 1,
+    trashedAt: r.trashed_at ?? null,
+    lastWriteAt: r.last_write_at ?? null,
     sqldVersion: r.sqld_version,
     failedReason: r.failed_reason ?? null,
     dns: {
@@ -283,12 +296,37 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     return c.json(rowToWorkspace(row), 201);
   });
 
-  app.delete("/api/workspaces/:id", (c) => {
+  app.patch("/api/workspaces/:id/protection", async (c) => {
     const ws = d.workspaces.getById(c.req.param("id"));
     if (!ws) throw new ApiError(404, "not_found", "workspace not found");
-    const dbs = d.databases.list({ workspaceId: ws.id });
+    let body: { protected: boolean };
+    try {
+      body = SetProtectionSchema.parse(await c.req.json());
+    } catch (err) {
+      throw new ApiError(400, "bad_request", "invalid protection payload", zodDetail(err));
+    }
+    d.workspaces.setProtected(ws.id, body.protected);
+    return c.json(rowToWorkspace(d.workspaces.getById(ws.id)!));
+  });
+
+  app.delete("/api/workspaces/:id", async (c) => {
+    const ws = d.workspaces.getById(c.req.param("id"));
+    if (!ws) throw new ApiError(404, "not_found", "workspace not found");
+    const dbs = d.databases.list({ workspaceId: ws.id, includeTrashed: true });
     if (dbs.length > 0) {
       throw new ApiError(409, "workspace_not_empty", "workspace still contains databases", dbs.map((x) => x.slug).join(", "));
+    }
+    if ((ws.protected ?? 1) === 1) {
+      throw new ApiError(423, "protected", `workspace "${ws.slug}" has delete protection enabled — disable it in Settings first`);
+    }
+    let body: { confirm: string };
+    try {
+      body = ConfirmSlugDeleteSchema.parse(await c.req.json());
+    } catch (err) {
+      throw new ApiError(400, "bad_request", "delete confirmation payload required ({ confirm: \"<slug>\" })", zodDetail(err));
+    }
+    if (body.confirm !== ws.slug) {
+      throw new ApiError(400, "confirm_mismatch", `confirmation string must exactly match workspace slug "${ws.slug}"`);
     }
     d.workspaces.delete(ws.id);
     return c.body(null, 204);
@@ -366,23 +404,92 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     return c.json(toDto(d.databases.getById(row.id)!));
   });
 
+  app.patch("/api/databases/:id/protection", async (c) => {
+    const row = requireDb(c.req.param("id"));
+    let body: { protected: boolean };
+    try {
+      body = SetProtectionSchema.parse(await c.req.json());
+    } catch (err) {
+      throw new ApiError(400, "bad_request", "invalid protection payload", zodDetail(err));
+    }
+    d.databases.setProtected(row.id, body.protected);
+    return c.json(toDto(d.databases.getById(row.id)!));
+  });
+
+  app.get("/api/databases/:id/delete-preview", async (c) => {
+    const row = requireDb(c.req.param("id"));
+    const diskBytes = dirBytes(row.data_dir);
+    let tableCount = 0;
+    let totalRows = 0;
+    if (row.status === "running" && row.port) {
+      try {
+        const stats = await inspectDatabaseStorage(hrana, {
+          id: row.id,
+          slug: row.slug,
+          port: row.port,
+          dataDir: row.data_dir,
+        });
+        tableCount = stats.tableRowCounts.length;
+        totalRows = stats.tableRowCounts.reduce((acc, t) => acc + t.count, 0);
+      } catch {
+        /* ignore if sqld isn't answering */
+      }
+    }
+    const preview: DeletePreview = {
+      id: row.id,
+      slug: row.slug,
+      name: row.name,
+      protected: (row.protected ?? 1) === 1,
+      diskBytes,
+      tableCount,
+      totalRows,
+      lastWriteAt: row.last_write_at ?? null,
+    };
+    return c.json(preview);
+  });
+
   app.delete("/api/databases/:id", async (c) => {
     const row = requireDb(c.req.param("id"));
     if (d.restore?.isRestoring(row.id)) throw new ApiError(409, "restoring", "a restore into this database is still running");
     if (d.importer?.isImporting(row.id)) throw new ApiError(409, "importing", "an import into this database is still running");
+    if ((row.protected ?? 1) === 1) {
+      throw new ApiError(423, "protected", `database "${row.slug}" has delete protection enabled — disable it in Settings first`);
+    }
+    let body: { confirm: string };
+    try {
+      body = ConfirmSlugDeleteSchema.parse(await c.req.json());
+    } catch (err) {
+      throw new ApiError(400, "bad_request", "delete confirmation payload required ({ confirm: \"<slug>\" })", zodDetail(err));
+    }
+    if (body.confirm !== row.slug) {
+      throw new ApiError(400, "confirm_mismatch", `confirmation string must exactly match database slug "${row.slug}"`);
+    }
+
     d.databases.updateStatus(row.id, "deleting");
     // killByDbId is serialized per-dbId (an in-flight start completes first)
     // and covers ADOPTED processes — the process MUST be dead before the data
-    // dir is removed, or we rm -rf a database that is being written.
+    // dir is moved to trash, or we move a database that is being written.
     await d.supervisor.killByDbId(row.id);
-    // Flush + stop replication before the files go. The replica itself is kept
-    // in S3 (retention applies), so a deleted database stays recoverable.
+    // Flush + stop replication before moving files.
     await d.backup?.stop(row.id, { removeConfig: true });
     assertInside(d.config.dataRoot, row.data_dir);
-    await rm(row.data_dir, { recursive: true, force: true });
+
+    const trashedAt = Date.now();
+    const trashRoot = path.join(d.config.dataRoot, "trash");
+    const trashPath = path.join(trashRoot, `${row.id}-${trashedAt}`);
+    assertInside(d.config.dataRoot, trashPath);
+    await mkdir(trashRoot, { recursive: true, mode: 0o700 });
+
+    if (existsSync(row.data_dir)) {
+      await rename(row.data_dir, trashPath);
+    } else {
+      await mkdir(trashPath, { recursive: true, mode: 0o700 });
+    }
+
     // Staging left by a restore/import interrupted by a crash.
     await rm(`${row.data_dir}.restore`, { recursive: true, force: true });
     await rm(`${row.data_dir}.import`, { recursive: true, force: true });
+
     // Remove now-empty parent directories (workspaces/<ws>/dbs, then the
     // workspace dir) — rmdir only deletes empty dirs, so a workspace with
     // other databases is preserved untouched.
@@ -393,26 +500,89 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
       for (const dir of [dbsDir, wsDir]) {
         if (path.resolve(dir) === path.resolve(dataRoot)) break;
         try {
-          await rmdir(dir); // only removes empty dirs; non-empty throws ENOTEMPTY
+          await rmdir(dir);
         } catch {
-          // ENOTEMPTY (a sibling database or the workspace root) — stop climbing.
           break;
         }
       }
     }
-    // Drop the per-database signing keypair too: keys are derived from the row
-    // id, which is never reused (new DBs get fresh UUIDs), so orphaned key
-    // files are dead weight. Guarded the same as data_dir.
-    {
-      const keyRel = dbKeyRelPath(row.id).replace(/\.pub$/, ".key");
-      const pubRel = dbKeyRelPath(row.id);
-      assertInside(d.config.dataRoot, path.join(d.config.dataRoot, keyRel));
-      await rm(path.join(d.config.dataRoot, keyRel), { force: true });
-      await rm(path.join(d.config.dataRoot, pubRel), { force: true });
-    }
+
     if (d.dns) await d.dns.remove(row);
     if (row.port && row.grpc_port) d.supervisor.portAllocator.release({ http: row.port, grpc: row.grpc_port });
-    d.databases.delete(row.id);
+    d.databases.markTrashed(row.id, trashedAt, trashPath);
+    return c.body(null, 204);
+  });
+
+  // ---- trash: list, restore, permanent purge ------------------------------
+  app.get("/api/trash", (c) => {
+    const retentionMs = d.config.trashDays * 86_400_000;
+    const wsMap = new Map(d.workspaces.list().map((w) => [w.id, w.name]));
+    const items: TrashItem[] = d.databases.listTrashed().map((r) => {
+      const trashedAt = r.trashed_at ?? r.created_at;
+      const diskBytes = r.trash_path ? dirBytes(r.trash_path) : 0;
+      return {
+        id: r.id,
+        workspaceId: r.workspace_id,
+        workspaceName: wsMap.get(r.workspace_id) ?? "Unknown",
+        slug: r.slug,
+        name: r.name,
+        trashedAt,
+        expiresAt: trashedAt + retentionMs,
+        diskBytes,
+      };
+    });
+    return c.json(items);
+  });
+
+  app.post("/api/trash/:id/restore", async (c) => {
+    const row = d.databases.getById(c.req.param("id"));
+    if (!row || row.status !== "trashed" || !row.trash_path) {
+      throw new ApiError(404, "not_found", "trashed database not found");
+    }
+    assertInside(d.config.dataRoot, row.trash_path);
+    assertInside(d.config.dataRoot, row.data_dir);
+
+    const pair = await d.supervisor.portAllocator.allocatePair();
+    try {
+      await mkdir(path.dirname(row.data_dir), { recursive: true, mode: 0o700 });
+      if (existsSync(row.trash_path)) {
+        await rename(row.trash_path, row.data_dir);
+      } else {
+        await mkdir(row.data_dir, { recursive: true, mode: 0o700 });
+      }
+      d.databases.markRestoredFromTrash(row.id, pair.http, pair.grpc);
+    } catch (err) {
+      d.supervisor.portAllocator.release(pair);
+      throw err;
+    }
+
+    if (row.auto_start === 1 && d.sqldOk) {
+      await d.supervisor.startDatabase(row.id, {
+        port: pair.http,
+        grpcPort: pair.grpc,
+        dataDir: row.data_dir,
+      });
+    }
+    if (d.dns) await d.dns.sync(d.databases.getById(row.id)!);
+    return c.json(toDto(d.databases.getById(row.id)!));
+  });
+
+  app.delete("/api/trash/:id", async (c) => {
+    const row = d.databases.getById(c.req.param("id"));
+    if (!row || row.status !== "trashed") {
+      throw new ApiError(404, "not_found", "trashed database not found");
+    }
+    let body: { confirm: string };
+    try {
+      body = ConfirmSlugDeleteSchema.parse(await c.req.json());
+    } catch (err) {
+      throw new ApiError(400, "bad_request", "delete confirmation payload required ({ confirm: \"<slug>\" })", zodDetail(err));
+    }
+    if (body.confirm !== row.slug) {
+      throw new ApiError(400, "confirm_mismatch", `confirmation string must exactly match database slug "${row.slug}"`);
+    }
+
+    await purgeTrashedDatabase(d.config.dataRoot, d.databases, row);
     return c.body(null, 204);
   });
 
@@ -445,6 +615,9 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
       throw new ApiError(400, "bad_request", "invalid query payload", zodDetail(err));
     }
     const res = await runSqlQuery(hrana, { id: row.id, slug: row.slug, port: row.port! }, body);
+    if (!body.readOnly && res.results.some((r) => r.rowsAffected > 0)) {
+      d.databases.touchLastWrite(row.id);
+    }
     return c.json(res);
   });
 
@@ -499,6 +672,7 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
       throw new ApiError(400, "bad_request", "invalid insert rows payload", zodDetail(err));
     }
     const res = await insertTableRows(hrana, { id: row.id, slug: row.slug, port: row.port! }, table, body);
+    if (res.affected > 0) d.databases.touchLastWrite(row.id);
     return c.json(res, 201);
   });
 
@@ -512,6 +686,7 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
       throw new ApiError(400, "bad_request", "invalid update rows payload", zodDetail(err));
     }
     const res = await updateTableRows(hrana, { id: row.id, slug: row.slug, port: row.port! }, table, body);
+    if (res.affected > 0) d.databases.touchLastWrite(row.id);
     return c.json(res);
   });
 
@@ -525,6 +700,7 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
       throw new ApiError(400, "bad_request", "invalid delete rows payload", zodDetail(err));
     }
     const res = await deleteTableRows(hrana, { id: row.id, slug: row.slug, port: row.port! }, table, body);
+    if (res.affected > 0) d.databases.touchLastWrite(row.id);
     return c.json(res);
   });
 
@@ -1014,7 +1190,7 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
 
   function requireDb(id: string): DbRow {
     const row = d.databases.getById(id);
-    if (!row) throw new ApiError(404, "not_found", "database not found");
+    if (!row || row.status === "trashed") throw new ApiError(404, "not_found", "database not found");
     return row;
   }
 
@@ -1025,6 +1201,41 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     }
     return row;
   }
+}
+
+export async function purgeTrashedDatabase(
+  dataRoot: string,
+  databases: DatabasesRepo,
+  row: DbRow,
+): Promise<void> {
+  if (row.trash_path) {
+    assertInside(dataRoot, row.trash_path);
+    await rm(row.trash_path, { recursive: true, force: true });
+  }
+  const keyRel = dbKeyRelPath(row.id).replace(/\.pub$/, ".key");
+  const pubRel = dbKeyRelPath(row.id);
+  assertInside(dataRoot, path.join(dataRoot, keyRel));
+  await rm(path.join(dataRoot, keyRel), { force: true });
+  await rm(path.join(dataRoot, pubRel), { force: true });
+  databases.delete(row.id);
+}
+
+export async function sweepExpiredTrash(
+  dataRoot: string,
+  databases: DatabasesRepo,
+  trashDays: number,
+  now = Date.now(),
+): Promise<number> {
+  const cutoff = now - trashDays * 86_400_000;
+  let purged = 0;
+  for (const row of databases.listTrashed()) {
+    const trashedAt = row.trashed_at ?? row.created_at;
+    if (trashedAt <= cutoff) {
+      await purgeTrashedDatabase(dataRoot, databases, row);
+      purged++;
+    }
+  }
+  return purged;
 }
 
 function sampleDto(s: { cpuPct: number | null; memoryBytes: number; diskBytes: number; uptimeSec: number; status: string; sampledAt: number }): Metrics {

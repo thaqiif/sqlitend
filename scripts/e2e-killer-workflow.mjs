@@ -33,11 +33,19 @@ const SQLD = path.join(ROOT, "bin", "sqld");
 const PORT = Number(process.env.SQLITEND_E2E_PORT ?? 6190);
 const RANGE = process.env.SQLITEND_E2E_PORT_RANGE ?? "6510-6600";
 const BASE = `http://127.0.0.1:${PORT}/api`;
+const ADMIN_TOKEN = "e2e-admin-token-secret";
 
 // --- tiny helpers -----------------------------------------------------------
 const j = (r) => r.json();
-function api(pathname, init, base = BASE) {
-  return fetch(base + pathname, { headers: { "content-type": "application/json" }, ...init });
+function api(pathname, init = {}, base = BASE) {
+  return fetch(base + pathname, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${ADMIN_TOKEN}`,
+      ...(init.headers ?? {}),
+    },
+  });
 }
 function assert(cond, label) {
   if (!cond) throw new Error(`ASSERTION FAILED: ${label}`);
@@ -65,6 +73,7 @@ async function boot() {
       SQLITEND_PORT_RANGE: RANGE,
       SQLITEND_TOKEN_TTL_HOURS: "24",
       SQLITEND_SAMPLE_INTERVAL_MS: "1000",
+      SQLITEND_ADMIN_TOKEN: ADMIN_TOKEN,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -76,7 +85,7 @@ async function boot() {
   let sys = null;
   for (let i = 0; i < 60; i++) {
     try {
-      const res = await fetch(BASE + "/system");
+      const res = await api("/system");
       if (res.ok) { sys = await res.json(); break; }
     } catch {}
     await sleep(250);
@@ -112,7 +121,7 @@ async function killerWorkflow(run) {
   assert(conn.httpUrl === `http://127.0.0.1:${db.port}`, "connection.httpUrl");
   assert(conn.hranaUrl === `ws://127.0.0.1:${db.port}`, "connection.hranaUrl");
   assert(conn.grpcUrl === `http://127.0.0.1:${db.grpcPort}`, "connection.grpcUrl");
-  assert(conn.dbName === "demo", "connection.dbName");
+  assert(conn.dbName === db.slug, "connection.dbName");
 
   // token + real SQL
   const issued = await (await api(`/databases/${db.id}/tokens`, { method: "POST", body: JSON.stringify({ scope: "full" }) })).json();
@@ -141,14 +150,21 @@ async function killerWorkflow(run) {
   assert(Number(met.memoryBytes) > 0, `metrics.memoryBytes > 0 (got ${met.memoryBytes})`);
   assert(met.uptimeSec > 0, "metrics.uptimeSec > 0");
 
-  // delete DB -> process + dir + ports gone; workspace delete once empty
-  const del = await api(`/databases/${db.id}`, { method: "DELETE" });
-  assert(del.status === 204, "DELETE database -> 204");
+  // delete DB -> unprotect -> soft-delete to trash -> purge from trash; workspace delete once empty
+  const lockedDel = await api(`/databases/${db.id}`, { method: "DELETE", body: JSON.stringify({ confirm: db.slug }) });
+  assert(lockedDel.status === 423, "protected database refuses DELETE with 423");
+  await api(`/databases/${db.id}/protection`, { method: "PATCH", body: JSON.stringify({ protected: false }) });
+  const del = await api(`/databases/${db.id}`, { method: "DELETE", body: JSON.stringify({ confirm: db.slug }) });
+  assert(del.status === 204, "DELETE database (to trash) -> 204");
   await sleep(500);
   const delConn = await api(`/databases/${db.id}/connection`).then(async (r) => r.ok ? await r.json() : null).catch(() => null);
   assert(delConn === null, "deleted database no longer resolvable");
 
-  const wsDel = await api(`/workspaces/${ws.id}`, { method: "DELETE" });
+  const purge = await api(`/trash/${db.id}`, { method: "DELETE", body: JSON.stringify({ confirm: db.slug }) });
+  assert(purge.status === 204, "DELETE /trash/:id permanently purges database -> 204");
+
+  await api(`/workspaces/${ws.id}/protection`, { method: "PATCH", body: JSON.stringify({ protected: false }) });
+  const wsDel = await api(`/workspaces/${ws.id}`, { method: "DELETE", body: JSON.stringify({ confirm: ws.slug }) });
   assert(wsDel.status === 204, "DELETE workspace (now empty) -> 204");
 
   const wall = Date.now() - t0;
@@ -195,8 +211,11 @@ async function stopStartCheck(run) {
   assert(authOk, "pre-stop token still authenticates (key reused across stop/start)");
 
   // cleanup
-  await api(`/databases/${db.id}`, { method: "DELETE" });
-  await api(`/workspaces/${ws.id}`, { method: "DELETE" });
+  await api(`/databases/${db.id}/protection`, { method: "PATCH", body: JSON.stringify({ protected: false }) });
+  await api(`/databases/${db.id}`, { method: "DELETE", body: JSON.stringify({ confirm: db.slug }) });
+  await api(`/trash/${db.id}`, { method: "DELETE", body: JSON.stringify({ confirm: db.slug }) });
+  await api(`/workspaces/${ws.id}/protection`, { method: "PATCH", body: JSON.stringify({ protected: false }) });
+  await api(`/workspaces/${ws.id}`, { method: "DELETE", body: JSON.stringify({ confirm: ws.slug }) });
 }
 
 // --- scoped cleanup ----------------------------------------------------------

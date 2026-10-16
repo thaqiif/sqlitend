@@ -9,6 +9,7 @@ export interface WorkspaceRow {
   id: string;
   slug: string;
   name: string;
+  protected?: number;
   created_at: number;
 }
 
@@ -16,6 +17,7 @@ export interface CreateWorkspaceInput {
   id: string;
   slug: string;
   name: string;
+  protected?: number;
   createdAt: number;
 }
 
@@ -23,33 +25,44 @@ export class WorkspacesRepo {
   constructor(private readonly db: Database) {}
 
   list(): WorkspaceRow[] {
-    return this.db.query("SELECT id, slug, name, created_at FROM workspaces ORDER BY created_at").all() as WorkspaceRow[];
+    return this.db.query("SELECT id, slug, name, protected, created_at FROM workspaces ORDER BY created_at").all() as WorkspaceRow[];
   }
 
   getById(id: string): WorkspaceRow | null {
-    const row = this.db.query("SELECT id, slug, name, created_at FROM workspaces WHERE id = ?").get(id);
+    const row = this.db.query("SELECT id, slug, name, protected, created_at FROM workspaces WHERE id = ?").get(id);
     return (row as WorkspaceRow | undefined) ?? null;
   }
 
   getBySlug(slug: string): WorkspaceRow | null {
-    const row = this.db.query("SELECT id, slug, name, created_at FROM workspaces WHERE slug = ?").get(slug);
+    const row = this.db.query("SELECT id, slug, name, protected, created_at FROM workspaces WHERE slug = ?").get(slug);
     return (row as WorkspaceRow | undefined) ?? null;
   }
 
   /** Insert a workspace. Throws if the slug already exists. */
   create(input: CreateWorkspaceInput): WorkspaceRow {
     const { id, slug, name, createdAt } = input;
+    const prot = input.protected ?? 1;
     try {
-      this.db
-        .query("INSERT INTO workspaces(id, slug, name, created_at) VALUES (?, ?, ?, ?)")
-        .run(id, slug, name, createdAt);
+      if (input.protected !== undefined) {
+        this.db
+          .query("INSERT INTO workspaces(id, slug, name, protected, created_at) VALUES (?, ?, ?, ?, ?)")
+          .run(id, slug, name, prot, createdAt);
+      } else {
+        this.db
+          .query("INSERT INTO workspaces(id, slug, name, created_at) VALUES (?, ?, ?, ?)")
+          .run(id, slug, name, createdAt);
+      }
     } catch (err) {
       if (isUniqueViolation(err)) {
         throw new Error(`workspace slug "${slug}" already exists`);
       }
       throw err;
     }
-    return { id, slug, name, created_at: createdAt };
+    return { id, slug, name, protected: prot, created_at: createdAt };
+  }
+
+  setProtected(id: string, isProtected: boolean): void {
+    this.db.query("UPDATE workspaces SET protected = ? WHERE id = ?").run(isProtected ? 1 : 0, id);
   }
 
   delete(id: string): void {

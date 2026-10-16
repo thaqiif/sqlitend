@@ -29,6 +29,10 @@ export interface DatabaseRow {
   last_crash_at?: number | null;
   last_crash_reason?: string | null;
   restart_count?: number;
+  protected?: number;
+  trashed_at?: number | null;
+  trash_path?: string | null;
+  last_write_at?: number | null;
 }
 
 export interface CreateDatabaseInput {
@@ -44,6 +48,7 @@ export interface CreateDatabaseInput {
   data_dir: string;
   auth_key?: string | null;
   auto_start?: number;
+  protected?: number;
   sqld_version?: string | null;
   created_at: number;
 }
@@ -62,20 +67,29 @@ const SELECT_FIELDS =
   "id, workspace_id, slug, name, status, pid, start_time, port, grpc_port, " +
   "data_dir, auth_key, auto_start, sqld_version, failed_reason, " +
   "dns_hostname, dns_record_id, dns_status, dns_error, created_at, " +
-  "crash_count, last_crash_at, last_crash_reason, restart_count";
+  "crash_count, last_crash_at, last_crash_reason, restart_count, " +
+  "protected, trashed_at, trash_path, last_write_at";
 
 export class DatabasesRepo {
   constructor(private readonly db: Database) {}
 
-  list(opts: { workspaceId?: string } = {}): DatabaseRow[] {
+  list(opts: { workspaceId?: string; includeTrashed?: boolean } = {}): DatabaseRow[] {
+    const trashFilter = opts.includeTrashed ? "" : " AND status != 'trashed'";
     if (opts.workspaceId) {
       return this.db
         .query(
-          `SELECT ${SELECT_FIELDS} FROM databases WHERE workspace_id = ? ORDER BY created_at`,
+          `SELECT ${SELECT_FIELDS} FROM databases WHERE workspace_id = ?${trashFilter} ORDER BY created_at`,
         )
         .all(opts.workspaceId) as DatabaseRow[];
     }
-    return this.db.query(`SELECT ${SELECT_FIELDS} FROM databases ORDER BY created_at`).all() as DatabaseRow[];
+    const whereClause = opts.includeTrashed ? "" : " WHERE status != 'trashed'";
+    return this.db.query(`SELECT ${SELECT_FIELDS} FROM databases${whereClause} ORDER BY created_at`).all() as DatabaseRow[];
+  }
+
+  listTrashed(): DatabaseRow[] {
+    return this.db
+      .query(`SELECT ${SELECT_FIELDS} FROM databases WHERE status = 'trashed' ORDER BY trashed_at DESC`)
+      .all() as DatabaseRow[];
   }
 
   getById(id: string): DatabaseRow | null {
@@ -114,17 +128,21 @@ export class DatabasesRepo {
       last_crash_at: null,
       last_crash_reason: null,
       restart_count: 0,
+      protected: input.protected ?? 1,
+      trashed_at: null,
+      trash_path: null,
+      last_write_at: null,
     };
     try {
       this.db
         .query(
-          `INSERT INTO databases(id, workspace_id, slug, name, status, pid, start_time, port, grpc_port, data_dir, auth_key, auto_start, sqld_version, failed_reason, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO databases(id, workspace_id, slug, name, status, pid, start_time, port, grpc_port, data_dir, auth_key, auto_start, protected, sqld_version, failed_reason, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           row.id, row.workspace_id, row.slug, row.name, row.status, row.pid,
           row.start_time, row.port, row.grpc_port, row.data_dir, row.auth_key,
-          row.auto_start, row.sqld_version, row.failed_reason, row.created_at,
+          row.auto_start, row.protected ?? 1, row.sqld_version, row.failed_reason, row.created_at,
         );
     } catch (err) {
       if (isUniqueViolation(err)) {
@@ -196,6 +214,30 @@ export class DatabasesRepo {
     this.db.query("UPDATE databases SET auto_start = ? WHERE id = ?").run(autoStart, dbId);
   }
 
+  setProtected(dbId: string, isProtected: boolean): void {
+    this.db.query("UPDATE databases SET protected = ? WHERE id = ?").run(isProtected ? 1 : 0, dbId);
+  }
+
+  markTrashed(dbId: string, trashedAt: number, trashPath: string): void {
+    this.db
+      .query(
+        "UPDATE databases SET status = 'trashed', pid = NULL, start_time = NULL, port = NULL, grpc_port = NULL, trashed_at = ?, trash_path = ? WHERE id = ?",
+      )
+      .run(trashedAt, trashPath, dbId);
+  }
+
+  markRestoredFromTrash(dbId: string, port: number, grpcPort: number): void {
+    this.db
+      .query(
+        "UPDATE databases SET status = 'stopped', port = ?, grpc_port = ?, trashed_at = NULL, trash_path = NULL WHERE id = ?",
+      )
+      .run(port, grpcPort, dbId);
+  }
+
+  touchLastWrite(dbId: string, at = Date.now()): void {
+    this.db.query("UPDATE databases SET last_write_at = ? WHERE id = ?").run(at, dbId);
+  }
+
   /** Record the Cloudflare DNS state for a database (straight SET, clearable). */
   setDns(dbId: string, dns: { hostname: string | null; recordId: string | null; status: string | null; error: string | null }): void {
     this.db
@@ -204,7 +246,7 @@ export class DatabasesRepo {
   }
 
   get count(): number {
-    const row = this.db.query("SELECT COUNT(*) AS n FROM databases").get() as { n: number };
+    const row = this.db.query("SELECT COUNT(*) AS n FROM databases WHERE status != 'trashed'").get() as { n: number };
     return Number(row.n);
   }
 }

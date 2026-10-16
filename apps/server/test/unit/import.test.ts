@@ -290,7 +290,16 @@ describe("import routes", () => {
     expect(((await r.json()) as { error: { code: string } }).error.code).toBe("import_failed");
     const row = databases.getById(id)!;
     mkdirSync(`${row.data_dir}.import`, { recursive: true });
-    expect((await a.request(`/api/databases/${id}`, { method: "DELETE", headers: { "x-sqlitend-csrf": "1" } })).status).toBe(204);
+    databases.setProtected(id, false);
+    expect(
+      (
+        await a.request(`/api/databases/${id}`, {
+          method: "DELETE",
+          headers: { "x-sqlitend-csrf": "1", "content-type": "application/json" },
+          body: JSON.stringify({ confirm: row.slug }),
+        })
+      ).status,
+    ).toBe(204);
     expect(existsSync(`${row.data_dir}.import`)).toBe(false);
   });
 

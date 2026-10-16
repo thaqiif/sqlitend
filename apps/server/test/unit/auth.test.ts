@@ -192,13 +192,15 @@ describe("control-plane auth", () => {
     await setPassword();
     const { send, login } = makeApp();
     const { cookie } = await login({ password: PASSWORD });
-    const ws = (await (await send("POST", "/api/workspaces", { body: { name: "Bots" }, cookie, ip: "100.64.0.9" })).json()) as { id: string };
-    await send("DELETE", `/api/workspaces/${ws.id}`, { cookie, ip: "100.64.0.9" });
-    await send("DELETE", `/api/workspaces/${ws.id}`, { cookie, ip: "100.64.0.9" }); // 404 now
+    const ws = (await (await send("POST", "/api/workspaces", { body: { name: "Bots" }, cookie, ip: "100.64.0.9" })).json()) as { id: string; slug: string };
+    await send("PATCH", `/api/workspaces/${ws.id}/protection`, { body: { protected: false }, cookie, ip: "100.64.0.9" });
+    await send("DELETE", `/api/workspaces/${ws.id}`, { body: { confirm: ws.slug }, cookie, ip: "100.64.0.9" });
+    await send("DELETE", `/api/workspaces/${ws.id}`, { body: { confirm: ws.slug }, cookie, ip: "100.64.0.9" }); // 404 now
     const rows = (await (await send("GET", "/api/audit?limit=10", { cookie })).json()) as { action: string; outcome: string; actor: string; ip: string; target: string | null }[];
-    expect(rows.slice(0, 4).map((r) => [r.action, r.outcome])).toEqual([
+    expect(rows.slice(0, 5).map((r) => [r.action, r.outcome])).toEqual([
       ["workspace.delete", "error"],
       ["workspace.delete", "ok"],
+      ["workspace.protection", "ok"],
       ["workspace.create", "ok"],
       ["auth.login", "ok"],
     ]);

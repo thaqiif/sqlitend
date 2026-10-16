@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
 import type { BackupStatus, Database, Metrics, MetricsOverviewResponse, Workspace } from "@sqlitend/shared";
 import { api } from "../api/client";
 import { shortSqldVersion } from "../format";
 import { CreateDatabaseDialog } from "../components/CreateDatabaseDialog";
 import { CreateWorkspaceDialog } from "../components/CreateWorkspaceDialog";
+import { DangerConfirmDialog } from "../components/DangerConfirmDialog";
 import { Modal } from "../components/Modal";
 
 const POLL_MS = 5000;
@@ -46,16 +46,11 @@ interface Props {
   onSelectWorkspace: (id: string) => void;
   onOpenDatabase: (id: string) => void;
   onCreateWorkspace: (name: string) => Promise<void>;
-  onDeleteWorkspace: (id: string) => Promise<void>;
-  /** Host advertised in connection URLs (from /api/system); loopback fallback. */
+  onDeleteWorkspace: (id: string, confirmSlug: string) => Promise<void>;
+  onWorkspacesChanged?: () => Promise<void>;
   publicHost?: string;
-  /** Databases were created/deleted (header counts refresh right away). */
   onChanged?: () => void;
 }
-
-type PendingDelete =
-  | { kind: "workspace"; id: string; name: string }
-  | { kind: "database"; id: string; name: string };
 
 interface MiniMetricProps {
   label: string;
@@ -78,6 +73,7 @@ export function DatabasesPage({
   onOpenDatabase,
   onCreateWorkspace,
   onDeleteWorkspace,
+  onWorkspacesChanged,
   publicHost = "127.0.0.1",
   onChanged,
 }: Props) {
@@ -85,7 +81,6 @@ export function DatabasesPage({
   const [metrics, setMetrics] = useState<Record<string, Metrics>>({});
   const [overview, setOverview] = useState<MetricsOverviewResponse | null>(null);
   const [backups, setBackups] = useState<Record<string, BackupStatus>>({});
-  // One global call for every card's backup + restore-verify state.
   const loadBackups = useCallback(
     () =>
       api
@@ -99,18 +94,16 @@ export function DatabasesPage({
     const t = setInterval(loadBackups, 15_000);
     return () => clearInterval(t);
   }, [loadBackups]);
+
   const [listError, setListError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [showCreateDatabase, setShowCreateDatabase] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
+  const [showWorkspaceDeleteConfirm, setShowWorkspaceDeleteConfirm] = useState(false);
+  const [protectionBusy, setProtectionBusy] = useState(false);
 
-  // The live workspace selection, read by the async `load` after each await so a
-  // stale poll (started for workspace A) never renders into workspace B's heading.
-  // busyRef is the workspace id currently being polled (null = idle): only the
-  // SAME workspace's in-flight poll is skipped, so a workspace switch mid-poll
-  // proceeds immediately instead of starving under the stale request.
   const busyRef = useRef<string | null>(null);
   const workspaceIdRef = useRef(selectedWorkspaceId);
   useEffect(() => {
@@ -130,10 +123,9 @@ export function DatabasesPage({
       busyRef.current = wsId;
       try {
         const dbs = await api.listDatabases(wsId);
-        if (workspaceIdRef.current !== wsId) return; // stale — a newer load owns the UI
+        if (workspaceIdRef.current !== wsId) return;
         setDatabases(dbs);
         setListError(null);
-        // Fetch live per-database metrics and system overview in parallel.
         const [entries, ov] = await Promise.all([
           Promise.all(
             dbs.map(async (db) => {
@@ -157,9 +149,6 @@ export function DatabasesPage({
         if (workspaceIdRef.current !== wsId) return;
         setListError(err instanceof Error ? err.message : "Failed to load databases");
       } finally {
-        // Only the poll that OWNS the current workspace may clear the flag and
-        // `loading` — a stale poll's finally must not flip the UI to the empty
-        // state (or a stuck loader) under the new workspace's heading.
         if (busyRef.current === wsId) {
           busyRef.current = null;
           setLoading(false);
@@ -169,7 +158,6 @@ export function DatabasesPage({
     [selectedWorkspaceId],
   );
 
-  // Reset local card state whenever the active workspace changes.
   useEffect(() => {
     setDatabases([]);
     setMetrics({});
@@ -177,7 +165,6 @@ export function DatabasesPage({
     setLoading(true);
   }, [selectedWorkspaceId]);
 
-  // Initial load + 5s list/metrics polling.
   useEffect(() => {
     load();
     const t = setInterval(() => load(), POLL_MS);
@@ -192,31 +179,19 @@ export function DatabasesPage({
     await load(true);
   }
 
-  async function handleDeleteDatabase(id: string) {
-    await api.deleteDatabase(id);
-    setPendingDelete(null);
-    onChanged?.();
+  const activeWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId) ?? null;
+
+  const handleToggleWorkspaceProtection = async (next: boolean) => {
+    if (!activeWorkspace) return;
+    setProtectionBusy(true);
     try {
-      await load(true);
-    } catch (err) {
-      // The modal is already closed; surface a refresh failure via the banner so
-      // it isn't silently swallowed (the deleted DB would otherwise linger).
-      setListError(err instanceof Error ? err.message : "Failed to refresh after delete");
+      await api.setWorkspaceProtection(activeWorkspace.id, next);
+      await onWorkspacesChanged?.();
+    } finally {
+      setProtectionBusy(false);
     }
-  }
+  };
 
-  async function handleConfirmDelete() {
-    if (!pendingDelete) return;
-    if (pendingDelete.kind === "workspace") {
-      await onDeleteWorkspace(pendingDelete.id);
-      setPendingDelete(null);
-    } else {
-      await handleDeleteDatabase(pendingDelete.id);
-    }
-  }
-
-  // Show the host the API advertises in connection URLs (defaults to loopback
-  // when /api/system hasn't been fetched yet), so cards match what clients use.
   const dbHost = (db: Database) => (db.port != null ? `${publicHost}:${db.port}` : null);
 
   return (
@@ -258,16 +233,6 @@ export function DatabasesPage({
                     <span className="workspace-name">{w.name}</span>
                     <span className="workspace-slug">{w.slug}</span>
                   </button>
-                  <button
-                    type="button"
-                    className="icon-btn danger"
-                    aria-label={`Delete workspace ${w.name}`}
-                    onClick={() =>
-                      setPendingDelete({ kind: "workspace", id: w.id, name: w.name })
-                    }
-                  >
-                    ×
-                  </button>
                 </div>
               );
             })
@@ -305,21 +270,36 @@ export function DatabasesPage({
         )}
 
         <div className="content-header">
-          <h2>
-            {workspaces.find((w) => w.id === selectedWorkspaceId)?.name ?? "Databases"}
-          </h2>
-          <button
-            type="button"
-            className="btn primary"
-            disabled={!selectedWorkspaceId}
-            onClick={() => setShowCreateDatabase(true)}
-          >
-            + New database
-          </button>
+          <div>
+            <h2>{activeWorkspace?.name ?? "Databases"}</h2>
+            {activeWorkspace && (
+              <span className="muted small">
+                slug: <code>{activeWorkspace.slug}</code> ·{" "}
+                {activeWorkspace.protected ? "🔒 Protected" : "🔓 Unprotected"}
+              </span>
+            )}
+          </div>
+          <div className="header-btn-group">
+            {activeWorkspace && (
+              <button
+                type="button"
+                className="btn ghost small"
+                onClick={() => setShowWorkspaceSettings(true)}
+              >
+                Workspace Settings
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn primary"
+              disabled={!selectedWorkspaceId}
+              onClick={() => setShowCreateDatabase(true)}
+            >
+              + New database
+            </button>
+          </div>
         </div>
 
-        {/* A transient poll failure must not hide the databases we already have;
-            keep it as a banner above the grid, not a replacement for it. */}
         {listError && databases.length > 0 && (
           <p className="list-banner error" role="alert">{listError}</p>
         )}
@@ -410,16 +390,6 @@ export function DatabasesPage({
                       <MiniSparkline values={summary.sparkline.memoryBytes} color="#3fb950" />
                     </div>
                   )}
-                  <button
-                    type="button"
-                    className="icon-btn danger db-delete"
-                    aria-label={`Delete database ${db.name}`}
-                    onClick={() =>
-                      setPendingDelete({ kind: "database", id: db.id, name: db.name })
-                    }
-                  >
-                    ×
-                  </button>
                 </article>
               );
             })}
@@ -437,11 +407,81 @@ export function DatabasesPage({
         onClose={() => setShowCreateDatabase(false)}
         onSubmit={handleCreateDatabase}
       />
-      <ConfirmDeleteDialog
-        pending={pendingDelete}
-        onCancel={() => setPendingDelete(null)}
-        onConfirm={handleConfirmDelete}
-      />
+
+      {/* Workspace Settings & Danger Zone Modal */}
+      {showWorkspaceSettings && activeWorkspace && (
+        <Modal ariaLabel="Workspace settings" onClose={() => setShowWorkspaceSettings(false)}>
+          <h2 className="modal-title">Workspace Settings — {activeWorkspace.name}</h2>
+          <p className="muted small">
+            Slug: <code>{activeWorkspace.slug}</code>
+          </p>
+
+          <div className="danger-zone-box">
+            <h3 className="danger-title">Danger Zone</h3>
+            <div className="danger-row">
+              <div>
+                <strong>Delete protection</strong>
+                <p className="muted small" style={{ margin: "0.2rem 0 0" }}>
+                  When enabled, this workspace cannot be deleted via UI or API (`423 protected`).
+                </p>
+              </div>
+              <label className="write-toggle-chip">
+                <input
+                  type="checkbox"
+                  checked={activeWorkspace.protected}
+                  disabled={protectionBusy}
+                  onChange={(e) => void handleToggleWorkspaceProtection(e.target.checked)}
+                />
+                <span>{activeWorkspace.protected ? "Protected" : "Unprotected"}</span>
+              </label>
+            </div>
+
+            <div className="danger-row" style={{ marginTop: "0.85rem" }}>
+              <div>
+                <strong>Delete workspace</strong>
+                <p className="muted small" style={{ margin: "0.2rem 0 0" }}>
+                  {databases.length > 0
+                    ? `Workspace contains ${databases.length} database(s) — move or purge all databases before deleting.`
+                    : activeWorkspace.protected
+                      ? "Disable delete protection above to enable workspace deletion."
+                      : "Permanently remove this empty workspace."}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn danger small"
+                disabled={activeWorkspace.protected || databases.length > 0}
+                onClick={() => {
+                  setShowWorkspaceSettings(false);
+                  setShowWorkspaceDeleteConfirm(true);
+                }}
+              >
+                Delete Workspace…
+              </button>
+            </div>
+          </div>
+
+          <div className="modal-actions">
+            <button type="button" className="btn ghost" onClick={() => setShowWorkspaceSettings(false)}>
+              Close
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {showWorkspaceDeleteConfirm && activeWorkspace && (
+        <DangerConfirmDialog
+          title={`Delete Workspace "${activeWorkspace.name}"`}
+          actionLabel="Delete Workspace"
+          slug={activeWorkspace.slug}
+          description="This permanently deletes the empty workspace."
+          onCancel={() => setShowWorkspaceDeleteConfirm(false)}
+          onConfirm={async (typedSlug) => {
+            await onDeleteWorkspace(activeWorkspace.id, typedSlug);
+            setShowWorkspaceDeleteConfirm(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -462,71 +502,5 @@ function BackupBadges({ b }: { b: BackupStatus | undefined }) {
         </span>
       )}
     </p>
-  );
-}
-
-function ConfirmDeleteDialog({
-  pending,
-  onCancel,
-  onConfirm,
-}: {
-  pending: PendingDelete | null;
-  onCancel: () => void;
-  onConfirm: () => Promise<void>;
-}) {
-  const [typed, setTyped] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  if (!pending) return null;
-
-  const match = typed.trim() === pending.name;
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!match || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await onConfirm();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Delete failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Modal ariaLabel="Confirm delete" onClose={onCancel}>
-      <h2 className="modal-title danger-title">
-        Delete {pending.kind} “{pending.name}”
-      </h2>
-      {pending.kind === "workspace" && (
-        <p className="hint">A workspace with databases cannot be deleted — remove its databases first.</p>
-      )}
-      <p className="hint">
-        This cannot be undone. Type the exact name <strong>{pending.name}</strong> to
-        confirm.
-      </p>
-      <form onSubmit={handleSubmit}>
-        <label className="field">
-          <input
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            placeholder={pending.name}
-            disabled={busy}
-          />
-        </label>
-        {error && <p className="error" role="alert">{error}</p>}
-        <div className="modal-actions">
-          <button type="button" className="btn ghost" onClick={onCancel} disabled={busy}>
-            Cancel
-          </button>
-          <button type="submit" className="btn danger" disabled={busy || !match}>
-            Delete
-          </button>
-        </div>
-      </form>
-    </Modal>
   );
 }

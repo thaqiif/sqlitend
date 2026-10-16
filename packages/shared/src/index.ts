@@ -7,6 +7,7 @@ export const WorkspaceSchema = z.object({
   id: z.string().uuid(),
   slug: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/),
   name: z.string().min(1).max(128),
+  protected: z.boolean().default(true),
   createdAt: z.number().int(),
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
@@ -26,6 +27,7 @@ export const DatabaseStatusSchema = z.enum([
   "crashed",
   "failed",
   "deleting",
+  "trashed",
   // Being restored from a backup replica (background job; auto_start stays 0
   // until the restored file is verified and in place).
   "restoring",
@@ -47,6 +49,9 @@ export const DatabaseSchema = z.object({
   grpcPort: z.number().int().nullable(),
   dataDir: z.string(),
   autoStart: z.boolean().default(true),
+  protected: z.boolean().default(true),
+  trashedAt: z.number().int().nullable().default(null),
+  lastWriteAt: z.number().int().nullable().default(null),
   sqldVersion: z.string().nullable(),
   /** Last launch failure (sqld stderr tail) — null after a successful start. */
   failedReason: z.string().nullable(),
@@ -527,3 +532,42 @@ export const MetricsOverviewResponseSchema = z.object({
   databases: z.record(z.string(), DatabaseMetricsSummarySchema),
 });
 export type MetricsOverviewResponse = z.infer<typeof MetricsOverviewResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Phase 4: Hard-to-Delete Workspaces & Databases (Protection & Trash)
+// ---------------------------------------------------------------------------
+
+export const SetProtectionSchema = z.object({
+  protected: z.boolean(),
+}).strict();
+export type SetProtection = z.infer<typeof SetProtectionSchema>;
+
+export const ConfirmSlugDeleteSchema = z.object({
+  confirm: z.string().min(1).max(128),
+}).strict();
+export type ConfirmSlugDelete = z.infer<typeof ConfirmSlugDeleteSchema>;
+
+export const DeletePreviewSchema = z.object({
+  id: z.string().uuid(),
+  slug: z.string(),
+  name: z.string(),
+  protected: z.boolean(),
+  diskBytes: z.number().int(),
+  tableCount: z.number().int(),
+  totalRows: z.number().int(),
+  lastWriteAt: z.number().int().nullable(),
+});
+export type DeletePreview = z.infer<typeof DeletePreviewSchema>;
+
+export const TrashItemSchema = z.object({
+  id: z.string().uuid(),
+  workspaceId: z.string().uuid(),
+  workspaceName: z.string(),
+  slug: z.string(),
+  name: z.string(),
+  trashedAt: z.number().int(),
+  expiresAt: z.number().int(),
+  diskBytes: z.number().int(),
+});
+export type TrashItem = z.infer<typeof TrashItemSchema>;
+

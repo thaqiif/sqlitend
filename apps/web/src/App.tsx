@@ -6,6 +6,7 @@ import { DatabasesPage } from "./pages/DatabasesPage";
 import { DatabaseDetail, type DbSubTab } from "./pages/DatabaseDetail";
 import { ActivityPage } from "./pages/ActivityPage";
 import { BackupsPage } from "./pages/BackupsPage";
+import { TrashPage } from "./pages/TrashPage";
 import { Modal } from "./components/Modal";
 
 const SYSTEM_POLL_MS = 30_000;
@@ -17,7 +18,8 @@ type View =
   | { name: "list" }
   | { name: "detail"; databaseId: string; tab?: DbSubTab; table?: string | null }
   | { name: "activity" }
-  | { name: "backups" };
+  | { name: "backups" }
+  | { name: "trash" };
 
 function getInitialTheme(): ThemeMode {
   try {
@@ -119,8 +121,8 @@ export function App({ onLogout }: { onLogout?: () => void } = {}) {
     setSelectedWorkspaceId(ws.id);
   }
 
-  async function handleDeleteWorkspace(id: string) {
-    await api.deleteWorkspace(id);
+  async function handleDeleteWorkspace(id: string, confirmSlug: string) {
+    await api.deleteWorkspace(id, confirmSlug);
     await refreshWorkspaces();
     void loadSystem();
   }
@@ -191,6 +193,9 @@ export function App({ onLogout }: { onLogout?: () => void } = {}) {
           <button type="button" className="btn ghost small" onClick={() => setView({ name: "backups" })}>
             Backups
           </button>
+          <button type="button" className="btn ghost small" onClick={() => setView({ name: "trash" })}>
+            Trash
+          </button>
           <button type="button" className="btn ghost small" onClick={() => setView({ name: "activity" })}>
             Activity
           </button>
@@ -212,7 +217,17 @@ export function App({ onLogout }: { onLogout?: () => void } = {}) {
       </header>
 
       <div className="app-body">
-        {view.name === "backups" ? (
+        {view.name === "trash" ? (
+          <TrashPage
+            onBack={() => setView({ name: "list" })}
+            onRestored={(id) => {
+              void refreshWorkspaces();
+              void loadSystem();
+              void workspaceDbsQuery.refetch();
+              setView({ name: "detail", databaseId: id, tab: "data" });
+            }}
+          />
+        ) : view.name === "backups" ? (
           <BackupsPage
             workspaces={workspaces}
             onBack={() => setView({ name: "list" })}
@@ -244,6 +259,7 @@ export function App({ onLogout }: { onLogout?: () => void } = {}) {
             onOpenDatabase={(id) => setView({ name: "detail", databaseId: id, tab: "data" })}
             onCreateWorkspace={handleCreateWorkspace}
             onDeleteWorkspace={handleDeleteWorkspace}
+            onWorkspacesChanged={refreshWorkspaces}
             publicHost={systemInfo?.publicHost}
             onChanged={() => {
               void loadSystem();

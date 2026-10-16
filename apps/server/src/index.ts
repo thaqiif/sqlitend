@@ -26,7 +26,7 @@ import { openMetadata, type Metadata } from "./db/metadata.ts";
 import { Supervisor } from "./supervisor/supervisor.ts";
 import { sqldVersion } from "./supervisor/launcher.ts";
 import { Sampler, type SamplerRow } from "./metrics/sampler.ts";
-import { createRoutes } from "./http/routes.ts";
+import { createRoutes, sweepExpiredTrash } from "./http/routes.ts";
 import type { AppEnv } from "./http/auth-routes.ts";
 import { createStaticHandler, isAllowedHost } from "./http/static.ts";
 import { createGatewayHandler, lookupByKey, parseHostTemplate } from "./gateway/gateway.ts";
@@ -121,6 +121,14 @@ console.log(`[boot] sqld ${sqldVer ?? `UNAVAILABLE at ${config.sqldPath} — run
 
 sampler.tick(samplerProvider());
 sampler.start(samplerProvider);
+
+void sweepExpiredTrash(config.dataRoot, databases, config.trashDays).then((n) => {
+  if (n > 0) console.log(`[trash] purged ${n} expired database(s) from trash`);
+});
+const trashSweepTimer = setInterval(() => {
+  void sweepExpiredTrash(config.dataRoot, databases, config.trashDays).catch(() => {});
+}, 3_600_000);
+(trashSweepTimer as unknown as { unref?: () => void }).unref?.();
 
 // ---------------------------------------------------------------------------
 // API + static

@@ -55,6 +55,8 @@ export interface Config {
   sqldPath: string;
   /** Default token lifetime in hours. */
   tokenTtlHours: number;
+  /** Soft-deleted database retention in days (SQLITEND_TRASH_DAYS, default 7). */
+  trashDays: number;
   /** Metrics sampler interval, ms. The UI polls at this same cadence. */
   sampleIntervalMs: number;
   /** Launch ready-probe timeout, ms. */
@@ -148,6 +150,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
       ? env.SQLITEND_SQLD_PATH
       : path.join(repoRoot, "bin", "sqld"),
     tokenTtlHours: parsePositiveInt("SQLITEND_TOKEN_TTL_HOURS", env.SQLITEND_TOKEN_TTL_HOURS, DEFAULT_TOKEN_TTL_HOURS, 1, 24 * 365),
+    trashDays: parsePositiveInt("SQLITEND_TRASH_DAYS", env.SQLITEND_TRASH_DAYS, 7, 1, 3650),
     sampleIntervalMs: parsePositiveInt("SQLITEND_SAMPLE_INTERVAL_MS", env.SQLITEND_SAMPLE_INTERVAL_MS, 5000, 250, 600_000),
     readyTimeoutMs: parsePositiveInt("SQLITEND_READY_TIMEOUT_MS", env.SQLITEND_READY_TIMEOUT_MS, 10_000, 500, 120_000),
     maxBodyBytes: parsePositiveInt("SQLITEND_MAX_BODY_BYTES", env.SQLITEND_MAX_BODY_BYTES, 1_000_000, 1024, 64 * 1024 * 1024),

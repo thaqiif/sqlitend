@@ -1,10 +1,10 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { BackupStatus, Connection, Database, Metrics, Token, TokenIssued, Workspace } from "@sqlitend/shared";
+import type { BackupStatus, Connection, Database, DeletePreview, Metrics, Token, TokenIssued, Workspace } from "@sqlitend/shared";
 import { RestoreDialog } from "../components/RestoreDialog";
+import { DangerConfirmDialog } from "../components/DangerConfirmDialog";
 import { fullTime, relTime } from "../format";
 import { api } from "../api/client";
-import { MetricTiles } from "../components/MetricTiles";
 import { Modal } from "../components/Modal";
 import { TokenReveal } from "../components/TokenReveal";
 import { DataGridTab } from "../components/DataGridTab";
@@ -120,6 +120,33 @@ export function DatabaseDetail({
 
   const [tokenForm, setTokenForm] = useState<{ name: string; hours: number } | null>(null);
   const [revealed, setRevealed] = useState<TokenIssued | null>(null);
+  const [protectionBusy, setProtectionBusy] = useState(false);
+  const [deletePreview, setDeletePreview] = useState<DeletePreview | null>(null);
+  const [showTrashConfirm, setShowTrashConfirm] = useState(false);
+
+  async function handleToggleProtection(next: boolean) {
+    setProtectionBusy(true);
+    setActionError(null);
+    try {
+      const updated = await api.setDatabaseProtection(databaseId, next);
+      setDb(updated);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to update protection");
+    } finally {
+      setProtectionBusy(false);
+    }
+  }
+
+  async function handleOpenTrashConfirm() {
+    setActionError(null);
+    try {
+      const preview = await api.getDeletePreview(databaseId);
+      setDeletePreview(preview);
+      setShowTrashConfirm(true);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to load delete preview");
+    }
+  }
 
   // Schema query via TanStack Query (enabled when DB is running)
   const schemaQuery = useQuery({
@@ -374,7 +401,7 @@ export function DatabaseDetail({
           className={`db-subtab ${tab === "settings" ? "active" : ""}`}
           onClick={() => setTab("settings")}
         >
-          Connection &amp; Tokens
+          Settings &amp; Tokens
         </button>
       </nav>
 
@@ -637,7 +664,63 @@ export function DatabaseDetail({
               </div>
             )}
           </section>
+
+          <section className="panel danger-zone-box">
+            <h3 className="panel-title danger-title">Danger Zone</h3>
+            <div className="danger-row">
+              <div>
+                <strong>Delete protection</strong>
+                <p className="muted small" style={{ margin: "0.2rem 0 0" }}>
+                  Protected by default. While enabled, <code>DELETE /api/databases/{db.id}</code> is rejected with HTTP 423.
+                </p>
+              </div>
+              <label className="write-toggle-chip">
+                <input
+                  type="checkbox"
+                  checked={db.protected}
+                  disabled={protectionBusy}
+                  onChange={(e) => void handleToggleProtection(e.target.checked)}
+                />
+                <span>{db.protected ? "Protected" : "Unprotected"}</span>
+              </label>
+            </div>
+
+            <div className="danger-row" style={{ marginTop: "0.9rem" }}>
+              <div>
+                <strong>Move database to Trash</strong>
+                <p className="muted small" style={{ margin: "0.2rem 0 0" }}>
+                  {db.protected
+                    ? "Disable delete protection above before moving this database to Trash."
+                    : "Stops the sqld process, releases ports, and moves the data directory to Trash (recoverable for SQLITEND_TRASH_DAYS)."}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn danger small"
+                disabled={db.protected}
+                onClick={() => void handleOpenTrashConfirm()}
+              >
+                Move to Trash…
+              </button>
+            </div>
+          </section>
         </>
+      )}
+
+      {showTrashConfirm && (
+        <DangerConfirmDialog
+          title={`Move "${db.name}" to Trash`}
+          actionLabel="Move to Trash"
+          slug={db.slug}
+          description="The database process will be stopped immediately and its files moved to Trash. You can restore it from the Trash view before retention expires."
+          stats={deletePreview}
+          onCancel={() => setShowTrashConfirm(false)}
+          onConfirm={async (typedSlug) => {
+            await api.deleteDatabase(db.id, typedSlug);
+            setShowTrashConfirm(false);
+            onBack();
+          }}
+        />
       )}
 
       {tokenForm && (

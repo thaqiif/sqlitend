@@ -140,23 +140,32 @@ describe("workspaces routes", () => {
     expect(errBody.error.code).toBe("bad_request");
   });
 
-  test("DELETE non-empty workspace -> 409 with db slugs; empty -> 204; unknown -> 404", async () => {
+  test("DELETE non-empty workspace -> 409 with db slugs; protected -> 423; empty unprotected with confirm -> 204; unknown -> 404", async () => {
     const app = makeApp();
     const ws = workspaces.create(wsRow("main"));
     databases.create(dbRow(ws.id, { slug: "one" }));
     databases.create(dbRow(ws.id, { slug: "two" }));
 
-    const conflict = await send(app, "DELETE", `/api/workspaces/${ws.id}`);
+    const conflict = await send(app, "DELETE", `/api/workspaces/${ws.id}`, { confirm: ws.slug });
     expect(conflict.status).toBe(409);
     const body = (await conflict.json()) as { error: { detail?: string } };
     expect(body.error.detail).toContain("one");
     expect(body.error.detail).toContain("two");
 
     const emptyWs = workspaces.create(wsRow("empty"));
-    const ok = await send(app, "DELETE", `/api/workspaces/${emptyWs.id}`);
+    // Protected by default -> 423
+    const locked = await send(app, "DELETE", `/api/workspaces/${emptyWs.id}`, { confirm: emptyWs.slug });
+    expect(locked.status).toBe(423);
+
+    // Disable protection -> wrong confirm -> 400; exact confirm -> 204
+    const unprotect = await send(app, "PATCH", `/api/workspaces/${emptyWs.id}/protection`, { protected: false });
+    expect(unprotect.status).toBe(200);
+    expect((await send(app, "DELETE", `/api/workspaces/${emptyWs.id}`, { confirm: "wrong-slug" })).status).toBe(400);
+
+    const ok = await send(app, "DELETE", `/api/workspaces/${emptyWs.id}`, { confirm: emptyWs.slug });
     expect(ok.status).toBe(204);
 
-    const missing = await send(app, "DELETE", `/api/workspaces/${uid()}`);
+    const missing = await send(app, "DELETE", `/api/workspaces/${uid()}`, { confirm: "none" });
     expect(missing.status).toBe(404);
   });
 });
@@ -349,21 +358,45 @@ describe("token management routes", () => {
 });
 
 describe("delete / tokens / metrics routes", () => {
-  test("DELETE /api/databases/:id -> 204 and removes the data dir; unknown -> 404; token revoke", async () => {
+  test("DELETE /api/databases/:id -> 423 when protected, 204 moves data dir to trash, restore & purge work; token revoke", async () => {
     const app = makeApp();
     const dataDir = path.join(dir, "workspaces", "ws", "dbs", "delme");
     mkdirSync(dataDir, { recursive: true });
     const d = databases.create(dbRow(wsId(), { slug: "delme", status: "running", port: 5005, grpc_port: 5006, data_dir: dataDir }));
 
-    const ok = await send(app, "DELETE", `/api/databases/${d.id}`, {});
+    // Protected by default -> 423
+    expect((await send(app, "DELETE", `/api/databases/${d.id}`, { confirm: "delme" })).status).toBe(423);
+
+    // Disable protection
+    expect((await send(app, "PATCH", `/api/databases/${d.id}/protection`, { protected: false })).status).toBe(200);
+    // Wrong confirm -> 400
+    expect((await send(app, "DELETE", `/api/databases/${d.id}`, { confirm: "wrong" })).status).toBe(400);
+
+    const ok = await send(app, "DELETE", `/api/databases/${d.id}`, { confirm: "delme" });
     expect(ok.status).toBe(204);
-    expect(databases.getById(d.id)).toBeNull();
+    expect(databases.getById(d.id)?.status).toBe("trashed");
     expect(existsSync(dataDir)).toBe(false);
     // Now-empty parents (dbs/, then the workspace dir) are cleaned up too.
     expect(existsSync(path.dirname(dataDir))).toBe(false);
     expect(existsSync(path.dirname(path.dirname(dataDir)))).toBe(false);
 
-    const missing = await send(app, "DELETE", `/api/databases/${uid()}`, {});
+    // Listed in /api/trash
+    const trashList = (await (await send(app, "GET", "/api/trash")).json()) as { id: string; slug: string }[];
+    expect(trashList.map((x) => x.slug)).toContain("delme");
+
+    // Restore from trash -> moves data_dir back and allocates new ports
+    const restoredRes = await send(app, "POST", `/api/trash/${d.id}/restore`, {});
+    expect(restoredRes.status).toBe(200);
+    expect(existsSync(dataDir)).toBe(true);
+    expect(databases.getById(d.id)?.status).not.toBe("trashed");
+
+    // Soft-delete again, then permanently purge from trash
+    await send(app, "DELETE", `/api/databases/${d.id}`, { confirm: "delme" });
+    expect((await send(app, "DELETE", `/api/trash/${d.id}`, { confirm: "wrong" })).status).toBe(400);
+    expect((await send(app, "DELETE", `/api/trash/${d.id}`, { confirm: "delme" })).status).toBe(204);
+    expect(databases.getById(d.id)).toBeNull();
+
+    const missing = await send(app, "DELETE", `/api/databases/${uid()}`, { confirm: "none" });
     expect(missing.status).toBe(404);
 
     const tok = databases.create(dbRow(wsId(), { slug: "tokdb" }));
@@ -389,9 +422,9 @@ describe("delete / tokens / metrics routes", () => {
     mkdirSync(keepDir, { recursive: true });
     mkdirSync(goneDir, { recursive: true });
     const keep = databases.create(dbRow(ws.id, { slug: "keep", status: "running", data_dir: keepDir }));
-    const gone = databases.create(dbRow(ws.id, { slug: "gone", status: "running", data_dir: goneDir }));
+    const gone = databases.create(dbRow(ws.id, { slug: "gone", status: "running", data_dir: goneDir, protected: 0 }));
 
-    const res = await send(app, "DELETE", `/api/databases/${gone.id}`, {});
+    const res = await send(app, "DELETE", `/api/databases/${gone.id}`, { confirm: "gone" });
     expect(res.status).toBe(204);
     expect(existsSync(goneDir)).toBe(false);
     // The dbs/ and workspace dirs survive because `keep` still lives there.
@@ -477,9 +510,10 @@ describe("dns routes", () => {
     const w = workspaces.create(wsRow(`ws-${uid().slice(0, 8)}`));
     const res = await send(app, "POST", `/api/workspaces/${w.id}/databases`, { name: "Bots Prod" });
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { id: string; dns: { hostname: string; status: string; error: string | null } };
+    const body = (await res.json()) as { id: string; slug: string; dns: { hostname: string; status: string; error: string | null } };
     expect(body.dns).toEqual({ hostname: expect.stringMatching(/^[a-z][a-z0-9]{11}-libsql\.cloudsby\.me$/), status: "active", error: null });
-    expect((await send(app, "DELETE", `/api/databases/${body.id}`)).status).toBe(204);
+    await send(app, "PATCH", `/api/databases/${body.id}/protection`, { protected: false });
+    expect((await send(app, "DELETE", `/api/databases/${body.id}`, { confirm: body.slug })).status).toBe(204);
     expect(log).toEqual([`sync ${body.dns.hostname.split("-libsql")[0]}`, "remove rec1"]);
   });
 
