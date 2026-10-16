@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { BackupStatus, Connection, Database, Metrics, Token, TokenIssued, Workspace } from "@sqlitend/shared";
 import { RestoreDialog } from "../components/RestoreDialog";
 import { fullTime, relTime } from "../format";
@@ -6,6 +7,12 @@ import { api } from "../api/client";
 import { MetricTiles } from "../components/MetricTiles";
 import { Modal } from "../components/Modal";
 import { TokenReveal } from "../components/TokenReveal";
+import { DataGridTab } from "../components/DataGridTab";
+import { StructureTab } from "../components/StructureTab";
+
+const SqlConsoleTab = lazy(() => import("../components/SqlConsoleTab"));
+
+export type DbSubTab = "data" | "sql" | "structure" | "metrics" | "settings";
 
 const POLL_MS = 5000;
 const MAX_EXPIRY_HOURS = 24 * 365;
@@ -24,7 +31,6 @@ const TOKEN_STATE_LABEL: Record<TokenState, string> = {
   expired: "expired",
   revoked: "revoked",
 };
-/** Consecutive metrics-poll failures before we surface "metrics unavailable". */
 const METRIC_ERROR_THRESHOLD = 2;
 
 interface Props {
@@ -32,10 +38,14 @@ interface Props {
   onBack: () => void;
   workspaces?: Workspace[];
   onOpenDatabase?: (id: string) => void;
+  activeTab?: DbSubTab;
+  onTabChange?: (tab: DbSubTab) => void;
+  selectedTable?: string | null;
+  onSelectTable?: (table: string) => void;
+  onOpenExplorerDrawer?: () => void;
 }
 
 function fmtTime(epochMs: number): string {
-  // API timestamps (createdAt/expiresAt) are epoch milliseconds (Date.now()).
   return new Date(epochMs).toLocaleString();
 }
 
@@ -54,7 +64,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
           } catch {
-            // Clipboard unavailable; leave it editable for manual copy.
+            // Clipboard unavailable
           }
         }}
       >
@@ -64,10 +74,67 @@ function CopyRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenDatabase }: Props) {
+export function DatabaseDetail({
+  databaseId,
+  onBack,
+  workspaces = [],
+  onOpenDatabase,
+  activeTab: controlledTab,
+  onTabChange,
+  selectedTable: controlledTable,
+  onSelectTable,
+  onOpenExplorerDrawer,
+}: Props) {
+  const queryClient = useQueryClient();
+  const [internalTab, setInternalTab] = useState<DbSubTab>("data");
+  const [internalTable, setInternalTable] = useState<string | null>(null);
+
+  const tab = controlledTab ?? internalTab;
+  const setTab = (next: DbSubTab) => {
+    setInternalTab(next);
+    onTabChange?.(next);
+  };
+
+  const selectedTable = controlledTable !== undefined ? controlledTable : internalTable;
+  const setSelectedTable = (tbl: string) => {
+    setInternalTable(tbl);
+    onSelectTable?.(tbl);
+  };
+
   const [copiedJti, setCopiedJti] = useState<string | null>(null);
   const [showRestore, setShowRestore] = useState(false);
   const [verifying, setVerifying] = useState(false);
+
+  const [db, setDb] = useState<Database | null>(null);
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [connection, setConnection] = useState<Connection | null>(null);
+  const [tokens, setTokens] = useState<Token[]>([]);
+  const [backup, setBackup] = useState<BackupStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [metricErrors, setMetricErrors] = useState(0);
+  const [metricsPolling, setMetricsPolling] = useState(false);
+  const metricsBusy = useRef(false);
+
+  const [tokenForm, setTokenForm] = useState<{ name: string; hours: number } | null>(null);
+  const [revealed, setRevealed] = useState<TokenIssued | null>(null);
+
+  // Schema query via TanStack Query (enabled when DB is running)
+  const schemaQuery = useQuery({
+    queryKey: ["schema", databaseId],
+    queryFn: () => api.getSchema(databaseId),
+    enabled: db?.status === "running",
+  });
+
+  const tables = schemaQuery.data?.tables ?? [];
+
+  // Default selectedTable to first table when schema loads
+  useEffect(() => {
+    if (tables.length > 0 && (!selectedTable || !tables.some((t) => t.name === selectedTable))) {
+      setSelectedTable(tables[0]!.name);
+    }
+  }, [tables, selectedTable]);
 
   async function handleVerify() {
     setVerifying(true);
@@ -80,29 +147,7 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
       setVerifying(false);
     }
   }
-  const [db, setDb] = useState<Database | null>(null);
-  const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [connection, setConnection] = useState<Connection | null>(null);
-  const [tokens, setTokens] = useState<Token[]>([]);
-  const [backup, setBackup] = useState<BackupStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  /** Consecutive metrics failures — lets us distinguish "no sample yet" from "metrics broken". */
-  const [metricErrors, setMetricErrors] = useState(0);
-  /** In-flight metrics request — drives the "refreshing" pulse AND prevents
-   *  interleaved 5s polls from overlapping. */
-  const [metricsPolling, setMetricsPolling] = useState(false);
-  /** Overlap guard: a slow poll never overlaps the next 5s tick. */
-  const metricsBusy = useRef(false);
 
-  // null = closed; otherwise the form opens prefilled (Rotate reuses the name).
-  const [tokenForm, setTokenForm] = useState<{ name: string; hours: number } | null>(null);
-  const [revealed, setRevealed] = useState<TokenIssued | null>(null);
-
-  // Initial load. The database row is required; connection + token metadata are
-  // fetched independently so one failed sub-request (e.g. 409 not_ready on a
-  // failed-start DB) never bricks the page and hides the recovery path.
   useEffect(() => {
     let alive = true;
     setLoading(true);
@@ -121,11 +166,11 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
     api
       .getConnection(databaseId)
       .then((c) => alive && setConnection(c))
-      .catch(() => {}); // degrade: "No connection details yet."
+      .catch(() => {});
     api
       .listTokens(databaseId)
       .then((t) => alive && setTokens(t))
-      .catch(() => {}); // degrade: token table stays empty.
+      .catch(() => {});
     const loadBackup = () => api.getBackup(databaseId).then((b) => alive && setBackup(b)).catch(() => {});
     void loadBackup();
     const backupTimer = setInterval(loadBackup, 10_000);
@@ -135,7 +180,6 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
     };
   }, [databaseId]);
 
-  // A restore runs in the background: follow it until it finishes.
   useEffect(() => {
     if (db?.status !== "restoring") return;
     const t = setInterval(async () => {
@@ -147,7 +191,6 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
     return () => clearInterval(t);
   }, [db?.status, databaseId]);
 
-  // Live metrics poll every 5s.
   useEffect(() => {
     let alive = true;
     async function load() {
@@ -161,8 +204,6 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
           setMetricErrors(0);
         }
       } catch {
-        // metrics may be unavailable while a database stops; count consecutive
-        // failures so a sustained outage is surfaced rather than shown as stale.
         if (alive) setMetricErrors((n) => n + 1);
       } finally {
         metricsBusy.current = false;
@@ -182,10 +223,11 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
     try {
       const d = await fn();
       setDb(d);
-      // Start/stop changes whether a connection is available (a stopped or
-      // failed-start DB has no endpoints) — refresh the panel in place.
       const c = await api.getConnection(databaseId).catch(() => null);
       setConnection(c);
+      if (d.status === "running") {
+        void queryClient.invalidateQueries({ queryKey: ["schema", databaseId] });
+      }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Action failed");
     }
@@ -213,7 +255,7 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
         setCopiedJti(t.jti);
         setTimeout(() => setCopiedJti((j) => (j === t.jti ? null : j)), 1500);
       } catch {
-        window.prompt("Copy the token:", token); // clipboard blocked: let the user copy by hand
+        window.prompt("Copy the token:", token);
       }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Could not load the token");
@@ -246,10 +288,8 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
   if (loading && !db) {
     return (
       <main className="content standalone">
-        <button type="button" className="btn ghost small" onClick={onBack}>
-          ← Back
-        </button>
-        <p className="muted">Loading database…</p>
+        <div className="skeleton-line" style={{ width: "220px", height: "28px", marginBottom: "16px" }} />
+        <div className="skeleton-line" style={{ width: "100%", height: "120px" }} />
       </main>
     );
   }
@@ -262,8 +302,17 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
     <main className="content standalone">
       <div className="detail-nav">
         <button type="button" className="btn ghost small" onClick={onBack}>
-          ← Back
+          ← Databases
         </button>
+        {onOpenExplorerDrawer && (
+          <button
+            type="button"
+            className="btn ghost small explorer-drawer-trigger"
+            onClick={onOpenExplorerDrawer}
+          >
+            ☰ Explorer ({tables.length})
+          </button>
+        )}
         <div className="detail-title">
           <h2>{db.name}</h2>
           {db.slug !== db.name && <span className="db-slug">{db.slug}</span>}
@@ -289,130 +338,50 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
         </div>
       </div>
 
+      {/* Sub-navigation tabs */}
+      <nav className="db-subtabs" aria-label="Database client views">
+        <button
+          type="button"
+          className={`db-subtab ${tab === "data" ? "active" : ""}`}
+          onClick={() => setTab("data")}
+        >
+          Data ({tables.length})
+        </button>
+        <button
+          type="button"
+          className={`db-subtab ${tab === "sql" ? "active" : ""}`}
+          onClick={() => setTab("sql")}
+        >
+          SQL Console
+        </button>
+        <button
+          type="button"
+          className={`db-subtab ${tab === "structure" ? "active" : ""}`}
+          onClick={() => setTab("structure")}
+        >
+          Structure
+        </button>
+        <button
+          type="button"
+          className={`db-subtab ${tab === "metrics" ? "active" : ""}`}
+          onClick={() => setTab("metrics")}
+        >
+          Metrics
+        </button>
+        <button
+          type="button"
+          className={`db-subtab ${tab === "settings" ? "active" : ""}`}
+          onClick={() => setTab("settings")}
+        >
+          Connection &amp; Tokens
+        </button>
+      </nav>
+
       {actionError && <p className="error inline" role="alert">{actionError}</p>}
 
-      {/* A failed start carries sqld's captured stderr tail — show it so the
-          operator can diagnose without SSHing to the box. */}
       {db.status === "failed" && db.failedReason && (
         <p className="error-detail" role="alert">Start failed: {db.failedReason}</p>
       )}
-
-      <section className="panel">
-        <h3 className="panel-title">Connection</h3>
-        {connection ? (
-          <div className="conn-list">
-            <div className="conn-primary">
-              <CopyRow label={connection.publicUrl ? "URL" : "HTTP"} value={connection.publicUrl ?? connection.httpUrl} />
-              <CopyRow
-                label=".ENV"
-                value={`LIBSQL_URL=${connection.publicUrl ?? connection.httpUrl}\nLIBSQL_AUTH_TOKEN=<token from "Generate token">`}
-              />
-            </div>
-            <p className="hint">
-              {connection.publicUrl
-                ? "Use the URL with @libsql/client (https://, also from Cloudflare Workers). Tokens are shown once, when generated."
-                : "No public hostname: enable the gateway (docs/gateway.md) to reach this database from outside the server."}
-            </p>
-            {db.dns.status && (
-              <p className={db.dns.status === "active" ? "muted" : "error-detail"} role={db.dns.status === "active" ? undefined : "alert"}>
-                DNS {db.dns.hostname}: {db.dns.status}
-                {db.dns.error ? ` — ${db.dns.error}` : ""}
-                {db.dns.status !== "active" && (
-                  <>
-                    {" "}
-                    <button type="button" className="btn ghost small" onClick={() => void runAction(() => api.syncDns(databaseId))}>
-                      Retry DNS
-                    </button>
-                  </>
-                )}
-              </p>
-            )}
-            <details className="conn-more">
-              <summary>Server-local endpoints (reachable only on this machine)</summary>
-              <CopyRow label="HTTP" value={connection.httpUrl} />
-              <CopyRow label="HRANA" value={connection.hranaUrl} />
-              <CopyRow label="gRPC" value={connection.grpcUrl} />
-            </details>
-          </div>
-        ) : (
-          <p className="muted">No connection details yet.</p>
-        )}
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <h3 className="panel-title">Tokens</h3>
-          <button
-            type="button"
-            className="btn primary small"
-            onClick={() => setTokenForm({ name: "", hours: NaN })}
-          >
-            + Generate token
-          </button>
-        </div>
-        {tokens.length === 0 ? (
-          <p className="muted">No tokens issued.</p>
-        ) : (
-          <div className="table-scroll">
-          <table className="token-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th>Expires</th>
-                <th>Last used</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {tokens.map((t) => (
-                <tr key={t.jti} className={tokenState(t) === "revoked" ? "row-dim" : undefined}>
-                  <td>{t.name ?? <span className="muted">unnamed</span>}</td>
-                  <td>
-                    <span className={`scope-badge token-${tokenState(t)}`}>{TOKEN_STATE_LABEL[tokenState(t)]}</span>
-                  </td>
-                  <td title={fullTime(t.createdAt)}>{relTime(t.createdAt)}</td>
-                  <td title={fullTime(t.expiresAt)}>{relTime(t.expiresAt)}</td>
-                  <td title={t.lastUsedAt ? fullTime(t.lastUsedAt) : undefined}>
-                    {t.lastUsedAt ? relTime(t.lastUsedAt) : <span className="muted">never</span>}
-                  </td>
-                  <td className="cell-end">
-                    {tokenState(t) !== "revoked" && (
-                      <>
-                        {t.copyable ? (
-                          <button type="button" className="btn ghost small" onClick={() => handleCopy(t)}>
-                            {copiedJti === t.jti ? "Copied" : "Copy"}
-                          </button>
-                        ) : (
-                          <span className="muted small" title="Issued before tokens were stored — rotate to get one you can copy">not copyable</span>
-                        )}
-                        <button
-                          type="button"
-                          className="btn ghost small"
-                          title="Issue a replacement with the same name; revoke this one once clients use the new token"
-                          onClick={() =>
-                            setTokenForm({
-                              name: t.name ?? "",
-                              hours: Math.max(1, Math.round((t.expiresAt - t.createdAt) / 3_600_000)),
-                            })
-                          }
-                        >
-                          Rotate
-                        </button>
-                        <button type="button" className="btn ghost small danger-text" onClick={() => handleRevoke(t)}>
-                          Revoke
-                        </button>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          </div>
-        )}
-      </section>
 
       {db.status === "restoring" && (
         <p className="muted" role="status">
@@ -420,74 +389,251 @@ export function DatabaseDetail({ databaseId, onBack, workspaces = [], onOpenData
         </p>
       )}
 
-      <section className="panel">
-        <div className="panel-header">
-          <h3 className="panel-title">Backup</h3>
-          {backup?.enabled && (
-            <button type="button" className="btn ghost small" onClick={() => setShowRestore(true)}>
-              Restore as new database…
-            </button>
-          )}
-        </div>
-        {!backup ? (
-          <p className="muted">Loading…</p>
-        ) : !backup.enabled ? (
-          <p className="error-detail" role="alert">
-            Not backed up — configure SQLITEND_BACKUP_S3_* on the server.
+      {/* Non-running notice for Data/SQL/Structure tabs */}
+      {(tab === "data" || tab === "sql" || tab === "structure") && db.status !== "running" ? (
+        <section className="panel empty-state">
+          <p>
+            Database is currently <strong>{db.status}</strong>. Start the database to inspect tables or execute SQL queries.
           </p>
-        ) : (
-          <div className="conn-list">
-            <p>
-              <span className={`scope-badge backup-${backup.state}`}>{backup.state}</span>{" "}
-              <span className="muted mono">{backup.replicaUrl}</span>
-            </p>
-            <p className="muted">
-              Last sync {backup.lastSyncAt ? fmtTime(backup.lastSyncAt) : "never"} · last snapshot{" "}
-              {backup.lastSnapshotAt ? fmtTime(backup.lastSnapshotAt) : "never"} · txid {backup.txidReplica ?? "—"} /{" "}
-              {backup.txidDb ?? "—"}
-              {backup.restarts > 0 ? ` · ${backup.restarts} restart(s)` : ""}
-            </p>
-            {backup.verify && (
-              <p className={backup.verify.health === "ok" || backup.verify.health === "pending" ? "muted" : "error-detail"}>
-                <span className={`scope-badge verify-${backup.verify.health}`}>
-                  restore-verify {backup.verify.health}
-                </span>{" "}
-                {backup.verify.lastAt
-                  ? `last ${fmtTime(backup.verify.lastAt)} (${backup.verify.lastOutcome}${backup.verify.lastDetail ? `: ${backup.verify.lastDetail}` : ""})`
-                  : "never run — first run tonight"}
-                {backup.verify.lastOkAt && backup.verify.lastOutcome !== "ok" ? ` · last success ${fmtTime(backup.verify.lastOkAt)}` : ""}{" "}
-                <button
-                  type="button"
-                  className="btn ghost small"
-                  onClick={() => void handleVerify()}
-                  disabled={verifying || db.status !== "running"}
-                  title="Restore the latest backup to a scratch copy, check integrity and schema, then delete it"
-                >
-                  {verifying ? "Verifying…" : "Verify now"}
-                </button>
-              </p>
-            )}
-            {backup.lastError && backup.state !== "ok" && (
-              <p className="error-detail" role="alert">
-                {backup.lastErrorAt ? `${fmtTime(backup.lastErrorAt)}: ` : ""}
-                {backup.lastError}
-              </p>
-            )}
-          </div>
-        )}
-      </section>
+          <button type="button" className="btn primary" onClick={handleStart}>
+            Start Database
+          </button>
+        </section>
+      ) : (
+        <>
+          {tab === "data" && (
+            <DataGridTab
+              dbId={databaseId}
+              tables={tables}
+              selectedTable={selectedTable}
+              onSelectTable={setSelectedTable}
+              onOpenSqlTab={() => setTab("sql")}
+            />
+          )}
 
-      <section className="panel">
-        <h3 className="panel-title">Live metrics</h3>
-        <MetricTiles metrics={metrics} />
-        <p className={`muted sampled${metricsPolling ? " sampling" : ""}`}>
-          {metricsDegraded
-            ? `Metrics unavailable — last sampled ${metrics ? fmtTime(metrics.sampledAt) : "never"}`
-            : metrics
-              ? `Sampled ${fmtTime(metrics.sampledAt)}`
-              : "Awaiting sample…"}
-        </p>
-      </section>
+          {tab === "sql" && (
+            <Suspense
+              fallback={
+                <section className="panel">
+                  <div className="skeleton-line" style={{ width: "100%", height: "180px" }} />
+                </section>
+              }
+            >
+              <SqlConsoleTab
+                dbId={databaseId}
+                tables={tables}
+                onSchemaMayHaveChanged={() => {
+                  void queryClient.invalidateQueries({ queryKey: ["schema", databaseId] });
+                  void queryClient.invalidateQueries({ queryKey: ["tableRows", databaseId] });
+                }}
+              />
+            </Suspense>
+          )}
+
+          {tab === "structure" && (
+            <StructureTab
+              tables={tables}
+              selectedTable={selectedTable}
+              onSelectTable={(t) => {
+                setSelectedTable(t);
+              }}
+              onRefresh={() => void schemaQuery.refetch()}
+            />
+          )}
+        </>
+      )}
+
+      {tab === "metrics" && (
+        <section className="panel">
+          <h3 className="panel-title">Live metrics</h3>
+          <MetricTiles metrics={metrics} />
+          <p className={`muted sampled${metricsPolling ? " sampling" : ""}`}>
+            {metricsDegraded
+              ? `Metrics unavailable — last sampled ${metrics ? fmtTime(metrics.sampledAt) : "never"}`
+              : metrics
+                ? `Sampled ${fmtTime(metrics.sampledAt)}`
+                : "Awaiting sample…"}
+          </p>
+        </section>
+      )}
+
+      {tab === "settings" && (
+        <>
+          <section className="panel">
+            <h3 className="panel-title">Connection</h3>
+            {connection ? (
+              <div className="conn-list">
+                <div className="conn-primary">
+                  <CopyRow label={connection.publicUrl ? "URL" : "HTTP"} value={connection.publicUrl ?? connection.httpUrl} />
+                  <CopyRow
+                    label=".ENV"
+                    value={`LIBSQL_URL=${connection.publicUrl ?? connection.httpUrl}\nLIBSQL_AUTH_TOKEN=<token from "Generate token">`}
+                  />
+                </div>
+                <p className="hint">
+                  {connection.publicUrl
+                    ? "Use the URL with @libsql/client (https://, also from Cloudflare Workers). Tokens are shown once, when generated."
+                    : "No public hostname: enable the gateway (docs/gateway.md) to reach this database from outside the server."}
+                </p>
+                {db.dns.status && (
+                  <p className={db.dns.status === "active" ? "muted" : "error-detail"} role={db.dns.status === "active" ? undefined : "alert"}>
+                    DNS {db.dns.hostname}: {db.dns.status}
+                    {db.dns.error ? ` — ${db.dns.error}` : ""}
+                    {db.dns.status !== "active" && (
+                      <>
+                        {" "}
+                        <button type="button" className="btn ghost small" onClick={() => void runAction(() => api.syncDns(databaseId))}>
+                          Retry DNS
+                        </button>
+                      </>
+                    )}
+                  </p>
+                )}
+                <details className="conn-more">
+                  <summary>Server-local endpoints (reachable only on this machine)</summary>
+                  <CopyRow label="HTTP" value={connection.httpUrl} />
+                  <CopyRow label="HRANA" value={connection.hranaUrl} />
+                  <CopyRow label="gRPC" value={connection.grpcUrl} />
+                </details>
+              </div>
+            ) : (
+              <p className="muted">No connection details yet.</p>
+            )}
+          </section>
+
+          <section className="panel">
+            <div className="panel-header">
+              <h3 className="panel-title">Tokens</h3>
+              <button
+                type="button"
+                className="btn primary small"
+                onClick={() => setTokenForm({ name: "", hours: NaN })}
+              >
+                + Generate token
+              </button>
+            </div>
+            {tokens.length === 0 ? (
+              <p className="muted">No tokens issued.</p>
+            ) : (
+              <div className="table-scroll">
+                <table className="token-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Status</th>
+                      <th>Created</th>
+                      <th>Expires</th>
+                      <th>Last used</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tokens.map((t) => (
+                      <tr key={t.jti} className={tokenState(t) === "revoked" ? "row-dim" : undefined}>
+                        <td>{t.name ?? <span className="muted">unnamed</span>}</td>
+                        <td>
+                          <span className={`scope-badge token-${tokenState(t)}`}>{TOKEN_STATE_LABEL[tokenState(t)]}</span>
+                        </td>
+                        <td title={fullTime(t.createdAt)}>{relTime(t.createdAt)}</td>
+                        <td title={fullTime(t.expiresAt)}>{relTime(t.expiresAt)}</td>
+                        <td title={t.lastUsedAt ? fullTime(t.lastUsedAt) : undefined}>
+                          {t.lastUsedAt ? relTime(t.lastUsedAt) : <span className="muted">never</span>}
+                        </td>
+                        <td className="cell-end">
+                          {tokenState(t) !== "revoked" && (
+                            <>
+                              {t.copyable ? (
+                                <button type="button" className="btn ghost small" onClick={() => handleCopy(t)}>
+                                  {copiedJti === t.jti ? "Copied" : "Copy"}
+                                </button>
+                              ) : (
+                                <span className="muted small" title="Issued before tokens were stored — rotate to get one you can copy">not copyable</span>
+                              )}
+                              <button
+                                type="button"
+                                className="btn ghost small"
+                                title="Issue a replacement with the same name; revoke this one once clients use the new token"
+                                onClick={() =>
+                                  setTokenForm({
+                                    name: t.name ?? "",
+                                    hours: Math.max(1, Math.round((t.expiresAt - t.createdAt) / 3_600_000)),
+                                  })
+                                }
+                              >
+                                Rotate
+                              </button>
+                              <button type="button" className="btn ghost small danger-text" onClick={() => handleRevoke(t)}>
+                                Revoke
+                              </button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <section className="panel">
+            <div className="panel-header">
+              <h3 className="panel-title">Backup</h3>
+              {backup?.enabled && (
+                <button type="button" className="btn ghost small" onClick={() => setShowRestore(true)}>
+                  Restore as new database…
+                </button>
+              )}
+            </div>
+            {!backup ? (
+              <p className="muted">Loading…</p>
+            ) : !backup.enabled ? (
+              <p className="error-detail" role="alert">
+                Not backed up — configure SQLITEND_BACKUP_S3_* on the server.
+              </p>
+            ) : (
+              <div className="conn-list">
+                <p>
+                  <span className={`scope-badge backup-${backup.state}`}>{backup.state}</span>{" "}
+                  <span className="muted mono">{backup.replicaUrl}</span>
+                </p>
+                <p className="muted">
+                  Last sync {backup.lastSyncAt ? fmtTime(backup.lastSyncAt) : "never"} · last snapshot{" "}
+                  {backup.lastSnapshotAt ? fmtTime(backup.lastSnapshotAt) : "never"} · txid {backup.txidReplica ?? "—"} /{" "}
+                  {backup.txidDb ?? "—"}
+                  {backup.restarts > 0 ? ` · ${backup.restarts} restart(s)` : ""}
+                </p>
+                {backup.verify && (
+                  <p className={backup.verify.health === "ok" || backup.verify.health === "pending" ? "muted" : "error-detail"}>
+                    <span className={`scope-badge verify-${backup.verify.health}`}>
+                      restore-verify {backup.verify.health}
+                    </span>{" "}
+                    {backup.verify.lastAt
+                      ? `last ${fmtTime(backup.verify.lastAt)} (${backup.verify.lastOutcome}${backup.verify.lastDetail ? `: ${backup.verify.lastDetail}` : ""})`
+                      : "never run — first run tonight"}
+                    {backup.verify.lastOkAt && backup.verify.lastOutcome !== "ok" ? ` · last success ${fmtTime(backup.verify.lastOkAt)}` : ""}{" "}
+                    <button
+                      type="button"
+                      className="btn ghost small"
+                      onClick={() => void handleVerify()}
+                      disabled={verifying || db.status !== "running"}
+                      title="Restore the latest backup to a scratch copy, check integrity and schema, then delete it"
+                    >
+                      {verifying ? "Verifying…" : "Verify now"}
+                    </button>
+                  </p>
+                )}
+                {backup.lastError && backup.state !== "ok" && (
+                  <p className="error-detail" role="alert">
+                    {backup.lastErrorAt ? `${fmtTime(backup.lastErrorAt)}: ` : ""}
+                    {backup.lastError}
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+        </>
+      )}
 
       {tokenForm && (
         <TokenForm
@@ -541,8 +687,6 @@ function TokenForm({
     try {
       const hours =
         Number.isFinite(expiresInHours) && expiresInHours > 0 ? expiresInHours : undefined;
-      // v1 mints full-access tokens only (sqld cannot enforce per-request scopes),
-      // so the scope is fixed and omitted from the request body.
       const trimmed = name.trim();
       const issued = await api.generateToken(databaseId, {
         ...(trimmed ? { name: trimmed } : {}),
@@ -561,7 +705,6 @@ function TokenForm({
     <Modal ariaLabel="Generate token" className="token-form" onClose={onClose}>
       <h2 className="modal-title">Generate token</h2>
       <p className="hint">Tokens grant full read + write access for this database.</p>
-      {/* Form so Enter in the lifetime field submits, matching the other dialogs. */}
       <form
         onSubmit={(e) => {
           e.preventDefault();

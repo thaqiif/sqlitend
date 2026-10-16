@@ -9,9 +9,19 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "6.20.3",
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/lang-sql": "6.10.0",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.14",
     "@sqlitend/shared": "*",
+    "@tanstack/react-query": "5.104.3",
+    "@tanstack/react-table": "8.21.3",
+    "@tanstack/react-virtual": "3.14.20",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "uplot": "1.6.32"
   },
   "devDependencies": {
     "@types/react": "^18.3.0",

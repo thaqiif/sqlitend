@@ -41,7 +41,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
       >
         <h2 className="panel-title">Sign in</h2>
         <label className="field">
-          <span className="field-label">Password</span>
+          <span className="field-label">Password or Admin Token</span>
           <input
             type="password"
             autoComplete="current-password"

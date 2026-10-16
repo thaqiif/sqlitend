@@ -2,6 +2,12 @@ import type {
   AuditEntry,
   BackupStatus,
   ControlBackupStatus,
+  DatabaseSchemaResponse,
+  DeleteRowsRequest,
+  InsertRowsRequest,
+  MutateRowsResponse,
+  QueryRequest,
+  QueryResponse,
   ReplicaInfo,
   RestoreRequest,
   SessionInfo,
@@ -13,8 +19,11 @@ import type {
   ErrorBody,
   Metrics,
   SystemInfo,
+  TableFilter,
+  TableRowsResponse,
   Token,
   TokenIssued,
+  UpdateRowsRequest,
   Workspace,
 } from "@sqlitend/shared";
 
@@ -156,6 +165,61 @@ export const api = {
   getSystemInfo: () => request<SystemInfo>("/system"),
 
   // -------------------------------------------------------------------------
+  // Built-in DB Client: Schema, SQL Query, and Table Rows
+  // -------------------------------------------------------------------------
+  getSchema: (id: string) =>
+    request<DatabaseSchemaResponse>(`/databases/${encodeURIComponent(id)}/schema`),
+
+  runQuery: (id: string, body: QueryRequest) =>
+    request<QueryResponse>(`/databases/${encodeURIComponent(id)}/query`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  getTableRows: (
+    id: string,
+    table: string,
+    params: {
+      limit?: number;
+      offset?: number;
+      sort?: string;
+      dir?: "asc" | "desc";
+      filters?: TableFilter[];
+    } = {},
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+    if (params.offset !== undefined) qs.set("offset", String(params.offset));
+    if (params.sort) qs.set("sort", params.sort);
+    if (params.dir) qs.set("dir", params.dir);
+    if (params.filters && params.filters.length > 0) {
+      qs.set("filters", JSON.stringify(params.filters));
+    }
+    const queryStr = qs.toString();
+    return request<TableRowsResponse>(
+      `/databases/${encodeURIComponent(id)}/tables/${encodeURIComponent(table)}/rows${queryStr ? `?${queryStr}` : ""}`,
+    );
+  },
+
+  insertTableRows: (id: string, table: string, body: InsertRowsRequest) =>
+    request<MutateRowsResponse>(
+      `/databases/${encodeURIComponent(id)}/tables/${encodeURIComponent(table)}/rows`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  updateTableRows: (id: string, table: string, body: UpdateRowsRequest) =>
+    request<MutateRowsResponse>(
+      `/databases/${encodeURIComponent(id)}/tables/${encodeURIComponent(table)}/rows`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  deleteTableRows: (id: string, table: string, body: DeleteRowsRequest) =>
+    request<MutateRowsResponse>(
+      `/databases/${encodeURIComponent(id)}/tables/${encodeURIComponent(table)}/rows`,
+      { method: "DELETE", body: JSON.stringify(body) },
+    ),
+
+  // -------------------------------------------------------------------------
   // Auth + audit
   // -------------------------------------------------------------------------
   getControlBackup: () => request<ControlBackupStatus>("/backups/control"),
@@ -172,6 +236,11 @@ export const api = {
     request<{ authenticated: true }>("/auth/login", {
       method: "POST",
       body: JSON.stringify(totp ? { password, totp } : { password }),
+    }),
+  loginWithToken: (token: string) =>
+    request<{ authenticated: true }>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ token }),
     }),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
   listAudit: (limit = 100, before?: number) =>
