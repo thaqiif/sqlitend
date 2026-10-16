@@ -74,7 +74,7 @@ export function RestoreDialog({
             isDisabled={busy}
           >
             <Label>Workspace</Label>
-            <Select.Trigger className="min-h-11">
+            <Select.Trigger className="min-h-11 items-center">
               <Select.Value />
               <Select.Indicator />
             </Select.Trigger>

@@ -21,6 +21,7 @@
     "@heroui/react": "3.2.6",
     "@heroui/styles": "3.2.6",
     "@internationalized/date": "3.12.4",
+    "@lezer/highlight": "1.2.5",
     "@react-aria/ssr": "3.10.1",
     "@react-aria/utils": "3.34.1",
     "@sqlitend/shared": "*",

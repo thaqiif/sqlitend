@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
-import type { QueryResponse, StatementResult, TableSchemaItem } from "@sqlitend/shared";
+import { Alert, Button, Card, Chip, Input, Modal as HeroModal, Switch, Tabs, TextField } from "@heroui/react";
+import type { QueryResponse, StatementResult, StatementStatus, TableSchemaItem } from "@sqlitend/shared";
 import { api, ApiError } from "../api/client";
 import { CodeMirrorSqlEditor } from "./CodeMirrorSqlEditor";
+import { PlayIcon } from "./icons";
 import { Modal } from "./Modal";
+import { SimpleSelect } from "./SimpleSelect";
 import { VirtualResultTable } from "./VirtualResultTable";
 
 interface Props {
@@ -25,7 +28,12 @@ interface SavedSnippet {
   sql: string;
 }
 
-const DESTRUCTIVE_RE = /\b(DROP\s+TABLE|DROP\s+VIEW|DROP\s+INDEX|DROP\s+TRIGGER|TRUNCATE|ALTER\s+TABLE|VACUUM|DELETE\s+FROM\s+[^\s;]+(?:\s*;|\s*$)|UPDATE\s+[^\s;]+\s+SET\s+(?:(?!\bWHERE\b)[\s\S])*?(?:;|$))/i;
+const HISTORY_MAX = 50;
+const CAPS = [100, 500, 1000, 5000, 10000].map((n) => ({ id: String(n), label: `${n.toLocaleString("en-US")} rows` }));
+
+// Statements that deserve a second look: schema changes, VACUUM, DELETE/UPDATE without a WHERE.
+const DESTRUCTIVE_RE =
+  /\b(DROP\s+TABLE|DROP\s+VIEW|DROP\s+INDEX|DROP\s+TRIGGER|TRUNCATE|ALTER\s+TABLE|VACUUM|DELETE\s+FROM\s+[^\s;]+(?:\s*;|\s*$)|UPDATE\s+[^\s;]+\s+SET\s+(?:(?!\bWHERE\b)[\s\S])*?(?:;|$))/i;
 
 function loadLocal<T>(key: string, fallback: T): T {
   try {
@@ -40,8 +48,19 @@ function saveLocal<T>(key: string, val: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(val));
   } catch {
-    // ignore storage quota errors
+    // quota exceeded or storage blocked: the in-memory state still works for this session
   }
+}
+
+const STATUS_TONE: Record<StatementStatus, "success" | "danger" | "default"> = {
+  ok: "success",
+  error: "danger",
+  not_executed: "default",
+};
+const STATUS_LABEL: Record<StatementStatus, string> = { ok: "ok", error: "error", not_executed: "not executed" };
+
+function newId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
 export default function SqlConsoleTab({ dbId, tables, onSchemaMayHaveChanged }: Props) {
@@ -55,351 +74,299 @@ export default function SqlConsoleTab({ dbId, tables, onSchemaMayHaveChanged }: 
   const [allowWrites, setAllowWrites] = useState(false);
   const [limit, setLimit] = useState(1000);
   const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; timedOut: boolean } | null>(null);
   const [response, setResponse] = useState<QueryResponse | null>(null);
-  const [activeStmtIdx, setActiveStmtIdx] = useState(0);
+  const [failedIdx, setFailedIdx] = useState<number | null>(null);
+  const [activeIdx, setActiveIdx] = useState(0);
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadLocal(historyKey, []));
   const [snippets, setSnippets] = useState<SavedSnippet[]>(() => loadLocal(snippetsKey, []));
   const [sidePanel, setSidePanel] = useState<"none" | "history" | "snippets">("none");
   const [snippetTitle, setSnippetTitle] = useState("");
-  const [destructiveConfirmSql, setDestructiveConfirmSql] = useState<string | null>(null);
+  const [confirmSql, setConfirmSql] = useState<string | null>(null);
 
   useEffect(() => {
     saveLocal(draftKey, sqlText);
   }, [draftKey, sqlText]);
 
-  const executeSql = async (targetSql: string, confirmedDestructive = false) => {
-    const trimmed = targetSql.trim();
-    if (!trimmed) return;
+  const pushHistory = (sql: string, durationMs: number, ok: boolean) => {
+    const next = [{ id: newId(), sql, at: Date.now(), durationMs, ok }, ...history.filter((h) => h.sql !== sql)].slice(0, HISTORY_MAX);
+    setHistory(next);
+    saveLocal(historyKey, next);
+  };
 
-    if (allowWrites && !confirmedDestructive && DESTRUCTIVE_RE.test(trimmed)) {
-      setDestructiveConfirmSql(trimmed);
+  const executeSql = async (target: string, confirmed = false) => {
+    const sql = target.trim();
+    if (!sql) return;
+    if (allowWrites && !confirmed && DESTRUCTIVE_RE.test(sql)) {
+      setConfirmSql(sql);
       return;
     }
-
-    setDestructiveConfirmSql(null);
+    setConfirmSql(null);
     setRunning(true);
     setError(null);
+    setFailedIdx(null);
     const t0 = performance.now();
     try {
-      const res = await api.runQuery(dbId, {
-        sql: trimmed,
-        readOnly: !allowWrites,
-        limit,
-        timeoutMs: 15_000,
-      });
+      const res = await api.runQuery(dbId, { sql, readOnly: !allowWrites, limit, timeoutMs: 15_000 });
       setResponse(res);
-      setActiveStmtIdx(0);
-      const nextHistory: HistoryEntry[] = [
-        {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          sql: trimmed,
-          at: Date.now(),
-          durationMs: res.totalDurationMs,
-          ok: true,
-        },
-        ...history.filter((h) => h.sql !== trimmed),
-      ].slice(0, 50);
-      setHistory(nextHistory);
-      saveLocal(historyKey, nextHistory);
-
-      if (allowWrites && /\b(CREATE|DROP|ALTER|INSERT|DELETE|UPDATE)\b/i.test(trimmed)) {
-        onSchemaMayHaveChanged();
-      }
+      setActiveIdx(0);
+      pushHistory(sql, res.totalDurationMs, true);
+      if (allowWrites && /\b(CREATE|DROP|ALTER|INSERT|DELETE|UPDATE)\b/i.test(sql)) onSchemaMayHaveChanged();
     } catch (err) {
-      const msg = err instanceof ApiError ? (err.detail ? `${err.message}: ${err.detail}` : err.message) : (err as Error).message;
-      setError(msg);
+      let message = err instanceof ApiError ? (err.detail ? `${err.message}: ${err.detail}` : err.message) : (err as Error).message;
+      const timedOut = err instanceof ApiError && err.status === 408;
+      if (timedOut && !/still be running/i.test(message)) message += " The query may still be running inside the database.";
+      setError({ message, timedOut });
       if (err instanceof ApiError && Array.isArray(err.body?.results)) {
-        const partialResults = err.body.results as StatementResult[];
-        const totalDurationMs = typeof err.body.totalDurationMs === "number" ? err.body.totalDurationMs : 0;
-        const failedIdx = typeof err.body.failedStatementIndex === "number" ? err.body.failedStatementIndex : 0;
-        setResponse({ results: partialResults, totalDurationMs });
-        setActiveStmtIdx(failedIdx);
+        const idx = typeof err.body.failedStatementIndex === "number" ? err.body.failedStatementIndex : 0;
+        setResponse({
+          results: err.body.results as StatementResult[],
+          totalDurationMs: typeof err.body.totalDurationMs === "number" ? err.body.totalDurationMs : 0,
+        });
+        setFailedIdx(idx);
+        setActiveIdx(idx);
       }
-      const nextHistory: HistoryEntry[] = [
-        {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          sql: trimmed,
-          at: Date.now(),
-          durationMs: Number((performance.now() - t0).toFixed(1)),
-          ok: false,
-        },
-        ...history.filter((h) => h.sql !== trimmed),
-      ].slice(0, 50);
-      setHistory(nextHistory);
-      saveLocal(historyKey, nextHistory);
+      pushHistory(sql, Number((performance.now() - t0).toFixed(1)), false);
     } finally {
       setRunning(false);
     }
   };
 
-  const handleSaveSnippet = () => {
+  const saveSnippet = () => {
     const title = snippetTitle.trim() || sqlText.trim().slice(0, 36) || "Untitled query";
-    const next: SavedSnippet[] = [
-      { id: `${Date.now()}`, title, sql: sqlText.trim() },
-      ...snippets,
-    ];
+    const next = [{ id: `${Date.now()}`, title, sql: sqlText.trim() }, ...snippets];
     setSnippets(next);
     saveLocal(snippetsKey, next);
     setSnippetTitle("");
     setSidePanel("snippets");
   };
 
-  const handleDeleteSnippet = (id: string) => {
+  const deleteSnippet = (id: string) => {
     const next = snippets.filter((s) => s.id !== id);
     setSnippets(next);
     saveLocal(snippetsKey, next);
   };
 
-  const activeResult: StatementResult | undefined = response?.results[activeStmtIdx] ?? response?.results[0];
+  const results = response?.results ?? [];
+  const active: StatementResult | undefined = results[activeIdx] ?? results[0];
 
   return (
-    <div className="sql-console-layout">
-      <div className="sql-toolbar">
-        <div className="sql-toolbar-left">
-          <button
-            type="button"
-            className="btn primary"
-            disabled={running || !sqlText.trim()}
-            onClick={() => void executeSql(sqlText)}
-            title="Run SQL (Ctrl/Cmd + Enter)"
-          >
-            {running ? "Running…" : "▶ Run"}
-          </button>
-
-          <label className={`write-toggle-chip ${allowWrites ? "write-enabled" : ""}`}>
-            <input
-              type="checkbox"
-              checked={allowWrites}
-              onChange={(e) => setAllowWrites(e.target.checked)}
-            />
-            <span>{allowWrites ? "Writes enabled" : "Read-only"}</span>
-          </label>
-
-          <label className="sql-limit-select">
-            <span className="muted small">Cap</span>
-            <select value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
-              <option value={100}>100 rows</option>
-              <option value={500}>500 rows</option>
-              <option value={1000}>1,000 rows</option>
-              <option value={5000}>5,000 rows</option>
-              <option value={10000}>10,000 rows</option>
-            </select>
-          </label>
-        </div>
-
-        <div className="sql-toolbar-right">
-          <button
-            type="button"
-            className={`btn ghost small ${sidePanel === "history" ? "active" : ""}`}
-            onClick={() => setSidePanel(sidePanel === "history" ? "none" : "history")}
-          >
+    <div className="flex min-w-0 flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Button variant="primary" className="min-h-11" isPending={running} isDisabled={!sqlText.trim()} onPress={() => void executeSql(sqlText)}>
+          <PlayIcon size={16} />
+          {running ? "Running..." : "Run"}
+        </Button>
+        <Switch isSelected={allowWrites} onChange={setAllowWrites} className="min-h-11">
+          <Switch.Content>
+            <Switch.Control>
+              <Switch.Thumb />
+            </Switch.Control>
+            Allow writes
+          </Switch.Content>
+        </Switch>
+        {allowWrites && (
+          <Chip color="warning" variant="soft" size="sm">
+            Writes enabled
+          </Chip>
+        )}
+        <SimpleSelect label="Row cap" hideLabel value={String(limit)} onChange={(v) => setLimit(Number(v))} options={CAPS} className="w-36" />
+        <div className="ml-auto flex gap-2">
+          <Button variant={sidePanel === "history" ? "secondary" : "ghost"} className="min-h-11" onPress={() => setSidePanel(sidePanel === "history" ? "none" : "history")}>
             History ({history.length})
-          </button>
-          <button
-            type="button"
-            className={`btn ghost small ${sidePanel === "snippets" ? "active" : ""}`}
-            onClick={() => setSidePanel(sidePanel === "snippets" ? "none" : "snippets")}
-          >
+          </Button>
+          <Button variant={sidePanel === "snippets" ? "secondary" : "ghost"} className="min-h-11" onPress={() => setSidePanel(sidePanel === "snippets" ? "none" : "snippets")}>
             Snippets ({snippets.length})
-          </button>
+          </Button>
         </div>
       </div>
 
-      <div className="sql-editor-and-drawer">
-        <div className="sql-editor-pane">
-          <CodeMirrorSqlEditor
-            value={sqlText}
-            onChange={setSqlText}
-            onRun={(s) => void executeSql(s)}
-            tables={tables}
-            placeholder="Write SQL here… Press Cmd/Ctrl+Enter to run selection or full script."
-          />
-          <div className="sql-Save-row">
-            <span className="muted small">Tip: Select a statement and press <kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd> to run only selection.</span>
-            <div className="snippet-quick-save">
-              <input
-                type="text"
-                placeholder="Save query as snippet…"
-                value={snippetTitle}
-                onChange={(e) => setSnippetTitle(e.target.value)}
-                className="input-compact"
-              />
-              <button
-                type="button"
-                className="btn ghost small"
-                disabled={!sqlText.trim()}
-                onClick={handleSaveSnippet}
-              >
-                Bookmark
-              </button>
-            </div>
-          </div>
-        </div>
+      <CodeMirrorSqlEditor
+        value={sqlText}
+        onChange={setSqlText}
+        onRun={(s) => void executeSql(s)}
+        tables={tables}
+        placeholder="Write SQL here. Ctrl/Cmd+Enter runs the selection, or everything if nothing is selected."
+      />
 
-        {sidePanel !== "none" && (
-          <aside className="sql-side-panel" aria-label={sidePanel === "history" ? "Query history" : "Saved snippets"}>
-            <div className="panel-head">
-              <h3>{sidePanel === "history" ? "Recent Queries (max 50)" : "Saved Snippets"}</h3>
-              <button type="button" className="btn ghost small" onClick={() => setSidePanel("none")}>
-                Close
-              </button>
-            </div>
-            {sidePanel === "history" ? (
-              history.length === 0 ? (
-                <p className="muted small">No queries executed in this browser yet.</p>
-              ) : (
-                <ul className="sql-list">
-                  {history.map((h) => (
-                    <li key={h.id} className="sql-list-item">
-                      <button
-                        type="button"
-                        className="sql-list-btn"
-                        onClick={() => setSqlText(h.sql)}
-                      >
-                        <code className="sql-preview">{h.sql}</code>
-                        <span className="muted small">
-                          {h.ok ? "✓" : "✕"} {h.durationMs}ms · {new Date(h.at).toLocaleTimeString()}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )
-            ) : snippets.length === 0 ? (
-              <p className="muted small">Bookmark frequent queries to access them here.</p>
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <p className="m-0 text-xs text-muted">
+          Select a statement and press <kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd> to run only the selection.
+        </p>
+        <div className="flex w-full items-end gap-2 sm:w-auto">
+          <TextField aria-label="Snippet title" value={snippetTitle} onChange={setSnippetTitle} className="min-w-0 flex-1">
+            <Input placeholder="Save query as snippet" className="min-h-11" />
+          </TextField>
+          <Button variant="secondary" className="min-h-11 shrink-0" isDisabled={!sqlText.trim()} onPress={saveSnippet}>
+            Save snippet
+          </Button>
+        </div>
+      </div>
+
+      {sidePanel !== "none" && (
+        <Card aria-label={sidePanel === "history" ? "Query history" : "Saved snippets"} className="gap-2 p-3">
+          <div className="flex items-center justify-between">
+            <h3 className="m-0 text-sm font-semibold">{sidePanel === "history" ? "Recent queries (last 50)" : "Saved snippets"}</h3>
+            <Button size="sm" variant="ghost" onPress={() => setSidePanel("none")}>
+              Close
+            </Button>
+          </div>
+          {sidePanel === "history" ? (
+            history.length === 0 ? (
+              <p className="m-0 text-sm text-muted">No queries executed in this browser yet.</p>
             ) : (
-              <ul className="sql-list">
-                {snippets.map((s) => (
-                  <li key={s.id} className="sql-list-item snippet-row">
-                    <button type="button" className="sql-list-btn" onClick={() => setSqlText(s.sql)}>
-                      <strong>{s.title}</strong>
-                      <code className="sql-preview">{s.sql}</code>
-                    </button>
-                    <button
-                      type="button"
-                      className="btn ghost small"
-                      onClick={() => handleDeleteSnippet(s.id)}
-                      aria-label={`Remove snippet ${s.title}`}
-                    >
-                      ×
+              <ul className="m-0 flex max-h-64 list-none flex-col gap-1 overflow-auto p-0">
+                {history.map((h) => (
+                  <li key={h.id}>
+                    <button type="button" className="flex min-h-11 w-full min-w-0 flex-col gap-1 rounded-lg p-2 text-left hover:bg-surface-hover" onClick={() => setSqlText(h.sql)}>
+                      <code className="truncate text-xs">{h.sql}</code>
+                      <span className="flex items-center gap-2 text-xs text-muted">
+                        <Chip size="sm" variant="soft" color={h.ok ? "success" : "danger"}>
+                          {h.ok ? "ok" : "failed"}
+                        </Chip>
+                        {h.durationMs} ms - {new Date(h.at).toLocaleTimeString()}
+                      </span>
                     </button>
                   </li>
                 ))}
               </ul>
-            )}
-          </aside>
-        )}
-      </div>
+            )
+          ) : snippets.length === 0 ? (
+            <p className="m-0 text-sm text-muted">Save frequent queries to find them here.</p>
+          ) : (
+            <ul className="m-0 flex max-h-64 list-none flex-col gap-1 overflow-auto p-0">
+              {snippets.map((s) => (
+                <li key={s.id} className="flex items-center gap-1">
+                  <button type="button" className="flex min-h-11 min-w-0 flex-1 flex-col gap-1 rounded-lg p-2 text-left hover:bg-surface-hover" onClick={() => setSqlText(s.sql)}>
+                    <strong className="truncate text-sm">{s.title}</strong>
+                    <code className="truncate text-xs text-muted">{s.sql}</code>
+                  </button>
+                  <Button size="sm" variant="ghost" aria-label={`Remove snippet ${s.title}`} onPress={() => deleteSnippet(s.id)}>
+                    Remove
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
 
       {error && (
-        <div className="error-banner" role="alert">
-          <div>
-            <strong>SQL Error:</strong> {error}
-          </div>
-          <button type="button" className="btn ghost small" onClick={() => setError(null)}>
+        <Alert status="danger" role="alert">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>{error.timedOut ? "Query timed out" : "SQL error"}</Alert.Title>
+            <Alert.Description>{error.message}</Alert.Description>
+          </Alert.Content>
+          <Button size="sm" variant="ghost" onPress={() => setError(null)}>
             Dismiss
-          </button>
-        </div>
+          </Button>
+        </Alert>
       )}
 
       {response && (
-        <section className="panel sql-results-panel" aria-label="Query results">
-          <div className="sql-results-header">
-            <div className="stmt-tabs" role="tablist">
-              {response.results.map((r, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  role="tab"
-                  aria-selected={i === activeStmtIdx}
-                  className={`stmt-tab ${i === activeStmtIdx ? "active" : ""}`}
-                  onClick={() => setActiveStmtIdx(i)}
-                >
-                  Stmt #{i + 1} (
-                  {r.status === "error"
-                    ? "error"
-                    : r.status === "not_executed"
-                      ? "not executed"
-                      : r.columns.length > 0
-                        ? `${r.rows.length} rows`
-                        : `${r.rowsAffected} affected`}
-                  )
-                </button>
-              ))}
-            </div>
-            <div className="sql-timing-meta muted small">
-              Total: <strong>{response.totalDurationMs} ms</strong>
-              {activeResult && (
-                <>
-                  {" · "}Stmt: <strong>{activeResult.durationMs} ms</strong>
-                  {activeResult.rowsAffected > 0 && (
-                    <>
-                      {" · "}Affected: <strong>{activeResult.rowsAffected}</strong>
-                    </>
-                  )}
-                  {activeResult.truncated && (
-                    <span className="badge-warn" style={{ marginLeft: "0.5rem" }}>
-                      Truncated at {limit} rows
-                    </span>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
+        <Card aria-label="Query results" className="min-w-0 gap-3 p-3">
+          <Tabs selectedKey={String(activeIdx)} onSelectionChange={(k) => setActiveIdx(Number(k))}>
+            <Tabs.ListContainer>
+              <Tabs.List aria-label="Statements">
+                {results.map((r, i) => (
+                  <Tabs.Tab key={i} id={String(i)} className="min-h-11 gap-2">
+                    Stmt {i + 1}
+                    <Chip size="sm" variant="soft" color={STATUS_TONE[r.status]}>
+                      {r.status === "ok" ? (r.columns.length > 0 ? `${r.rows.length} rows` : `${r.rowsAffected} affected`) : STATUS_LABEL[r.status]}
+                    </Chip>
+                    <Tabs.Indicator />
+                  </Tabs.Tab>
+                ))}
+              </Tabs.List>
+            </Tabs.ListContainer>
+          </Tabs>
 
-          {activeResult && (
-            activeResult.status === "error" ? (
-              <div className="empty-state compact">
-                <p>
-                  <strong>Statement #{activeStmtIdx + 1} failed:</strong> {activeResult.error ?? "SQL error"}
-                </p>
-              </div>
-            ) : activeResult.status === "not_executed" ? (
-              <div className="empty-state compact">
-                <p>
-                  Statement #{activeStmtIdx + 1} was <strong>not executed</strong> because an earlier statement failed.
-                </p>
-              </div>
-            ) : activeResult.columns.length > 0 ? (
-              <VirtualResultTable
-                columns={activeResult.columns}
-                rows={activeResult.rows}
-              />
-            ) : (
-              <div className="empty-state compact">
-                <p>
-                  Statement executed in <strong>{activeResult.durationMs} ms</strong> —{" "}
-                  <strong>{activeResult.rowsAffected}</strong> row(s) affected
-                  {activeResult.lastInsertRowid ? ` (last insert rowid: ${activeResult.lastInsertRowid})` : ""}.
-                </p>
-              </div>
-            )
-          )}
-        </section>
+          <p className="m-0 text-xs text-muted">
+            Total <strong>{response.totalDurationMs} ms</strong>
+            {active && (
+              <>
+                {" - "}statement <strong>{active.durationMs} ms</strong>
+                {active.rowsAffected > 0 && (
+                  <>
+                    {" - "}affected <strong>{active.rowsAffected}</strong>
+                  </>
+                )}
+              </>
+            )}
+            {active?.truncated && (
+              <Chip size="sm" color="warning" variant="soft" className="ml-2">
+                Truncated at {limit.toLocaleString("en-US")} rows
+              </Chip>
+            )}
+          </p>
+
+          {active && <StatementView result={active} index={activeIdx} failedIdx={failedIdx} />}
+        </Card>
       )}
 
-      {destructiveConfirmSql && (
-        <Modal ariaLabel="Confirm destructive SQL" onClose={() => setDestructiveConfirmSql(null)}>
-          <h2>Confirm Destructive SQL</h2>
-          <p className="muted">
-            This statement appears to modify schema or delete/update rows without a WHERE clause:
-          </p>
-          <pre className="code-block">{destructiveConfirmSql}</pre>
-          <div className="modal-actions">
-            <button type="button" className="btn ghost" onClick={() => setDestructiveConfirmSql(null)}>
+      {confirmSql && (
+        <Modal ariaLabel="Confirm destructive SQL" onClose={() => setConfirmSql(null)}>
+          <HeroModal.Header>
+            <HeroModal.Heading className="text-danger">Confirm destructive SQL</HeroModal.Heading>
+          </HeroModal.Header>
+          <HeroModal.Body className="flex flex-col gap-3 p-1">
+            <p className="m-0 text-sm text-muted">
+              This changes the schema, or deletes/updates rows without a WHERE clause. It runs with writes enabled and cannot be undone.
+            </p>
+            <pre className="m-0 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-surface-secondary p-3 font-mono text-xs">{confirmSql}</pre>
+          </HeroModal.Body>
+          <HeroModal.Footer>
+            <Button variant="ghost" className="min-h-11" onPress={() => setConfirmSql(null)}>
               Cancel
-            </button>
-            <button
-              type="button"
-              className="btn danger"
-              onClick={() => void executeSql(destructiveConfirmSql, true)}
-            >
-              Execute Anyway
-            </button>
-          </div>
+            </Button>
+            <Button variant="danger" className="min-h-11" onPress={() => void executeSql(confirmSql, true)}>
+              Execute anyway
+            </Button>
+          </HeroModal.Footer>
         </Modal>
       )}
     </div>
+  );
+}
+
+function StatementView({ result, index, failedIdx }: { result: StatementResult; index: number; failedIdx: number | null }) {
+  const sql = <pre className="m-0 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-surface-secondary p-2 font-mono text-xs">{result.statement}</pre>;
+  if (result.status === "error") {
+    return (
+      <div className="flex flex-col gap-2">
+        <Alert status="danger" role="alert">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Statement {index + 1} failed</Alert.Title>
+            <Alert.Description>{result.error ?? "SQL error"}</Alert.Description>
+          </Alert.Content>
+        </Alert>
+        {sql}
+      </div>
+    );
+  }
+  if (result.status === "not_executed") {
+    return (
+      <div className="flex flex-col gap-2">
+        <Alert status="default">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Not executed</Alert.Title>
+            <Alert.Description>
+              Statement {index + 1} did not run because {failedIdx !== null ? `statement ${failedIdx + 1}` : "an earlier statement"} failed.
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+        {sql}
+      </div>
+    );
+  }
+  if (result.columns.length > 0) return <VirtualResultTable columns={result.columns} rows={result.rows} />;
+  return (
+    <p className="m-0 text-sm">
+      Executed in <strong>{result.durationMs} ms</strong>, <strong>{result.rowsAffected}</strong> row(s) affected
+      {result.lastInsertRowid ? ` (last insert rowid: ${result.lastInsertRowid})` : ""}.
+    </p>
   );
 }

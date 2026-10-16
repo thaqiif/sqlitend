@@ -1,150 +1,124 @@
 import { useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { Button, Chip } from "@heroui/react";
 import type { SqlValue } from "@sqlitend/shared";
+import { copyText, downloadCsv, toCsv } from "../csv";
 
 interface Props {
   columns: string[];
   rows: SqlValue[][];
 }
 
-function toCsvCell(v: SqlValue): string {
-  if (v === null || v === undefined) return "";
-  const s = String(v);
-  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
+const ROW_HEIGHT = 36;
+const COL_WIDTH = 180;
 
+/** Row- and column-virtualised result grid for the SQL console (up to 10,000 rows x any width). */
 export function VirtualResultTable({ columns, rows }: Props) {
   const parentRef = useRef<HTMLDivElement | null>(null);
-  const [copiedMsg, setCopiedMsg] = useState<string | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
 
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 36,
+    estimateSize: () => ROW_HEIGHT,
     overscan: 12,
   });
-
   const colVirtualizer = useVirtualizer({
     horizontal: true,
     count: columns.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 180,
+    estimateSize: () => COL_WIDTH,
     overscan: 5,
   });
 
-  const flashCopied = (msg: string) => {
-    setCopiedMsg(msg);
-    setTimeout(() => setCopiedMsg(null), 1600);
+  const notify = (msg: string) => {
+    setFlash(msg);
+    setTimeout(() => setFlash(null), 1600);
   };
 
-  const copyAsJson = () => {
-    const objs = rows.map((r) => {
-      const o: Record<string, SqlValue> = {};
-      columns.forEach((c, idx) => {
-        o[c] = r[idx] ?? null;
-      });
-      return o;
-    });
-    void navigator.clipboard?.writeText(JSON.stringify(objs, null, 2));
-    flashCopied("Copied JSON");
+  const copyJson = async () => {
+    const objs = rows.map((r) => Object.fromEntries(columns.map((c, i) => [c, r[i] ?? null])));
+    notify((await copyText(JSON.stringify(objs, null, 2))) ? "Copied JSON" : "Clipboard unavailable");
   };
-
   const exportCsv = () => {
-    const header = columns.map(toCsvCell).join(",");
-    const body = rows.map((r) => columns.map((_, idx) => toCsvCell(r[idx] ?? null)).join(",")).join("\n");
-    const blob = new Blob([`${header}\n${body}`], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `query-result-${Date.now()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    flashCopied("Downloaded CSV");
+    downloadCsv(`query-result-${Date.now()}.csv`, toCsv(columns, rows));
+    notify("Downloaded CSV");
   };
 
-  const virtualRows = rowVirtualizer.getVirtualItems();
+  const totalWidth = Math.max(colVirtualizer.getTotalSize(), 100);
   const virtualCols = colVirtualizer.getVirtualItems();
-  const totalWidth = colVirtualizer.getTotalSize();
-  const totalHeight = rowVirtualizer.getTotalSize();
 
   return (
-    <div className="virtual-result-wrapper">
-      <div className="result-export-bar">
-        <span className="muted small">
-          Showing {rows.length.toLocaleString()} row{rows.length === 1 ? "" : "s"} × {columns.length} col{columns.length === 1 ? "" : "s"}
+    <div className="flex min-w-0 flex-col gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-muted">
+          {rows.length.toLocaleString()} row{rows.length === 1 ? "" : "s"} x {columns.length} column{columns.length === 1 ? "" : "s"}
         </span>
-        <div className="result-export-actions">
-          {copiedMsg && <span className="copied-pill">{copiedMsg}</span>}
-          <button type="button" className="btn ghost small" onClick={copyAsJson}>
+        <div className="flex items-center gap-2">
+          {flash && (
+            <Chip color="success" variant="soft" size="sm" role="status">
+              {flash}
+            </Chip>
+          )}
+          <Button size="sm" variant="secondary" onPress={() => void copyJson()}>
             Copy JSON
-          </button>
-          <button type="button" className="btn ghost small" onClick={exportCsv}>
+          </Button>
+          <Button size="sm" variant="secondary" onPress={exportCsv}>
             Export CSV
-          </button>
+          </Button>
         </div>
       </div>
 
-      <div ref={parentRef} className="virtual-grid-viewport" style={{ maxHeight: "420px" }}>
-        <div
-          className="virtual-grid-header"
-          style={{ width: `${Math.max(totalWidth, 100)}px` }}
-        >
-          {virtualCols.map((vc) => (
-            <div
-              key={vc.key}
-              className="virtual-grid-th"
-              style={{
-                width: `${vc.size}px`,
-                transform: `translateX(${vc.start}px)`,
-              }}
-            >
-              {columns[vc.index]}
+      <div
+        ref={parentRef}
+        className="relative max-h-[420px] overflow-auto rounded-xl border border-separator bg-surface"
+        data-testid="result-scroll"
+      >
+        <div role="table" aria-label="Query result" aria-rowcount={rows.length + 1}>
+          <div role="rowgroup" className="sticky top-0 z-10 h-9 bg-surface-secondary" style={{ width: totalWidth }}>
+            <div role="row" className="relative h-9">
+              {virtualCols.map((vc) => (
+                <div
+                  key={vc.key}
+                  role="columnheader"
+                  className="absolute left-0 top-0 flex h-9 items-center truncate border-b border-separator px-2 text-xs font-semibold"
+                  style={{ width: vc.size, transform: `translateX(${vc.start}px)` }}
+                >
+                  {columns[vc.index]}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-
-        <div
-          className="virtual-grid-body"
-          style={{
-            height: `${totalHeight}px`,
-            width: `${Math.max(totalWidth, 100)}px`,
-          }}
-        >
-          {virtualRows.map((vr) => {
-            const row = rows[vr.index]!;
-            return (
-              <div
-                key={vr.key}
-                className="virtual-grid-tr"
-                style={{
-                  height: `${vr.size}px`,
-                  transform: `translateY(${vr.start}px)`,
-                }}
-              >
-                {virtualCols.map((vc) => {
-                  const val = row[vc.index] ?? null;
-                  return (
-                    <div
-                      key={vc.key}
-                      className={`virtual-grid-td ${val === null ? "cell-null" : ""}`}
-                      style={{
-                        width: `${vc.size}px`,
-                        transform: `translateX(${vc.start}px)`,
-                      }}
-                      title={val === null ? "NULL" : String(val)}
-                      onDoubleClick={() => {
-                        void navigator.clipboard?.writeText(val === null ? "NULL" : String(val));
-                        flashCopied("Copied cell");
-                      }}
-                    >
-                      {val === null ? <span className="null-badge">NULL</span> : String(val)}
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
+          </div>
+          <div role="rowgroup" className="relative" style={{ height: rowVirtualizer.getTotalSize(), width: totalWidth }}>
+            {rowVirtualizer.getVirtualItems().map((vr) => {
+              const row = rows[vr.index]!;
+              return (
+                <div
+                  key={vr.key}
+                  role="row"
+                  aria-rowindex={vr.index + 2}
+                  className="absolute left-0 top-0 hover:bg-surface-hover"
+                  style={{ height: vr.size, width: totalWidth, transform: `translateY(${vr.start}px)` }}
+                >
+                  {virtualCols.map((vc) => {
+                    const val = row[vc.index] ?? null;
+                    return (
+                      <div
+                        key={vc.key}
+                        role="cell"
+                        className="absolute left-0 top-0 flex h-full items-center truncate border-b border-separator px-2 text-sm"
+                        style={{ width: vc.size, transform: `translateX(${vc.start}px)` }}
+                        title={val === null ? "NULL" : String(val)}
+                        onDoubleClick={async () => notify((await copyText(val === null ? "NULL" : String(val))) ? "Copied cell" : "Clipboard unavailable")}
+                      >
+                        {val === null ? <span className="rounded bg-default px-1 text-xs text-muted">NULL</span> : String(val)}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>

@@ -10,6 +10,7 @@ import { CreateDatabaseDialog } from "../components/CreateDatabaseDialog";
 import { CreateWorkspaceDialog } from "../components/CreateWorkspaceDialog";
 import { DangerConfirmDialog } from "../components/DangerConfirmDialog";
 import { Modal } from "../components/Modal";
+import { LockIcon, UnlockIcon } from "../components/icons";
 
 const POLL_MS = 5000;
 
@@ -255,7 +256,7 @@ export function DatabasesPage({
               className="min-w-0 flex-1"
             >
               <Label>Workspace</Label>
-              <Select.Trigger className="min-h-11">
+              <Select.Trigger className="min-h-11 items-center">
                 <Select.Value />
                 <Select.Indicator />
               </Select.Trigger>
@@ -293,7 +294,10 @@ export function DatabasesPage({
             {activeWorkspace && (
               <span className="text-xs text-muted">
                 slug: <code>{activeWorkspace.slug}</code> ·{" "}
-                {activeWorkspace.protected ? "🔒 Protected" : "🔓 Unprotected"}
+                <span className="inline-flex items-center gap-1 align-middle">
+                  {activeWorkspace.protected ? <LockIcon size={14} /> : <UnlockIcon size={14} />}
+                  {activeWorkspace.protected ? "Protected" : "Unprotected"}
+                </span>
               </span>
             )}
           </div>
@@ -428,10 +432,12 @@ export function DatabasesPage({
                   aria-label="Delete protection"
                   className="min-h-11"
                 >
-                  <Switch.Control>
-                    <Switch.Thumb />
-                  </Switch.Control>
-                  <Switch.Content>{activeWorkspace.protected ? "Protected" : "Unprotected"}</Switch.Content>
+                  <Switch.Content>
+                    <Switch.Control>
+                      <Switch.Thumb />
+                    </Switch.Control>
+                    {activeWorkspace.protected ? "Protected" : "Unprotected"}
+                  </Switch.Content>
                 </Switch>
               </div>
 

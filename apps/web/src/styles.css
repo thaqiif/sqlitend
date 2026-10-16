@@ -1,7 +1,6 @@
-@layer theme, base, legacy, components, utilities;
+@layer theme, base, components, utilities;
 @import "tailwindcss";
 @import "@heroui/styles";
-@import "./legacy.css" layer(legacy);
 
 @theme inline {
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -32,4 +31,19 @@ body {
   --breakpoint-sm: 600px;
   --breakpoint-md: 900px;
   --breakpoint-lg: 1280px;
+}
+
+/* SQL editor token colours (CodeMirror reads these); AA contrast on --field-background in both themes. */
+:root,
+[data-theme="light"] {
+  --sql-keyword: oklch(0.45 0.2 290);
+  --sql-string: oklch(0.45 0.14 150);
+  --sql-number: oklch(0.5 0.17 50);
+  --sql-type: oklch(0.45 0.12 230);
+}
+[data-theme="dark"] {
+  --sql-keyword: oklch(0.78 0.14 295);
+  --sql-string: oklch(0.8 0.14 150);
+  --sql-number: oklch(0.8 0.13 70);
+  --sql-type: oklch(0.8 0.1 230);
 }

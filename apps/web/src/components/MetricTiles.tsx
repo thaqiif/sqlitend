@@ -23,7 +23,7 @@ function fmtUptime(sec: number): string {
   return `${m}m`;
 }
 
-function Tile({ label, children }: { label: string; children: ReactNode }) {
+export function Tile({ label, children }: { label: string; children: ReactNode }) {
   return (
     <Card className="gap-1 p-3">
       <span className="text-xs text-muted">{label}</span>

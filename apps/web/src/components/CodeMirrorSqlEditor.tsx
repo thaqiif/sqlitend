@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, placeholder as cmPlaceholder } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { syntaxHighlighting, defaultHighlightStyle, bracketMatching } from "@codemirror/language";
+import { syntaxHighlighting, HighlightStyle, bracketMatching } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import { autocompletion, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { sql, SQLite } from "@codemirror/lang-sql";
 import type { TableSchemaItem } from "@sqlitend/shared";
@@ -15,147 +16,137 @@ interface Props {
   placeholder?: string;
 }
 
+// Colours come from HeroUI's CSS variables (and the --sql-* tokens in styles.css), so the editor
+// follows light/dark without rebuilding the CodeMirror state.
 const editorTheme = EditorView.theme({
   "&": {
-    fontSize: "0.86rem",
+    fontSize: "0.875rem",
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
-    backgroundColor: "var(--bg)",
-    color: "var(--fg)",
-    borderRadius: "8px",
+    backgroundColor: "var(--field-background)",
+    color: "var(--field-foreground)",
+    borderRadius: "var(--radius)",
     border: "1px solid var(--border)",
   },
+  "&.cm-focused": {
+    outline: "2px solid var(--focus)",
+    outlineOffset: "1px",
+  },
+  ".cm-scroller": { fontFamily: "inherit", maxHeight: "50vh" },
   ".cm-content": {
     padding: "0.65rem 0",
-    minHeight: "150px",
+    minHeight: "160px",
     caretColor: "var(--accent)",
   },
-  ".cm-focused": {
-    outline: "2px solid var(--accent)",
-    outlineOffset: "-1px",
-  },
+  ".cm-line": { padding: "0 0.65rem" },
   ".cm-gutters": {
-    backgroundColor: "var(--panel)",
+    backgroundColor: "var(--surface-secondary)",
     color: "var(--muted)",
-    borderRight: "1px solid var(--border-soft)",
-    borderTopLeftRadius: "8px",
-    borderBottomLeftRadius: "8px",
+    border: "none",
+    borderRight: "1px solid var(--separator)",
   },
-  ".cm-activeLineGutter": {
-    backgroundColor: "var(--panel-2)",
-  },
-  ".cm-activeLine": {
-    backgroundColor: "rgba(79, 140, 255, 0.06)",
-  },
+  ".cm-activeLineGutter": { backgroundColor: "var(--surface-tertiary)" },
+  ".cm-activeLine": { backgroundColor: "var(--accent-soft)" },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "var(--accent-soft-hover)" },
+  ".cm-placeholder": { color: "var(--field-placeholder)" },
   ".cm-tooltip.cm-tooltip-autocomplete": {
-    backgroundColor: "var(--panel)",
+    backgroundColor: "var(--overlay)",
     border: "1px solid var(--border)",
-    borderRadius: "6px",
-    color: "var(--fg)",
+    borderRadius: "var(--radius)",
+    color: "var(--overlay-foreground)",
   },
+  ".cm-tooltip-autocomplete ul li[aria-selected]": {
+    backgroundColor: "var(--accent)",
+    color: "var(--accent-foreground)",
+  },
+  // 16px stops iOS Safari zooming the page when the editor is focused.
+  "@media (max-width: 599px)": { "&": { fontSize: "16px" } },
 });
+
+const sqlHighlight = HighlightStyle.define([
+  { tag: [tags.keyword, tags.operatorKeyword, tags.modifier], color: "var(--sql-keyword)", fontWeight: "600" },
+  { tag: [tags.string, tags.special(tags.string)], color: "var(--sql-string)" },
+  { tag: [tags.number, tags.bool, tags.null], color: "var(--sql-number)" },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "var(--muted)", fontStyle: "italic" },
+  { tag: [tags.typeName, tags.standard(tags.name)], color: "var(--sql-type)" },
+  { tag: [tags.operator, tags.punctuation], color: "var(--muted)" },
+]);
+
+function schemaOf(tables: TableSchemaItem[]): Record<string, string[]> {
+  return Object.fromEntries(tables.map((t) => [t.name, t.columns.map((c) => c.name)]));
+}
+
+const sqlLang = (tables: TableSchemaItem[]) => sql({ dialect: SQLite, schema: schemaOf(tables), upperCaseKeywords: true });
 
 export function CodeMirrorSqlEditor({ value, onChange, onRun, tables, placeholder }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const sqlCompartmentRef = useRef(new Compartment());
-  const onRunRef = useRef(onRun);
-  const onChangeRef = useRef(onChange);
-  onRunRef.current = onRun;
-  onChangeRef.current = onChange;
+  // Latest props for the mount-once editor: callbacks are read at event time, and the first-render
+  // values seed the initial state. Later changes of value/tables are synced by the effects below.
+  const latest = useRef({ value, tables, placeholder, onRun, onChange });
+  latest.current = { value, tables, placeholder, onRun, onChange };
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    const schemaObj: Record<string, string[]> = {};
-    for (const t of tables) {
-      schemaObj[t.name] = t.columns.map((c) => c.name);
-    }
-
     const runCommand = (view: EditorView) => {
       const sel = view.state.selection.main;
       const selectedText = sel.empty ? "" : view.state.sliceDoc(sel.from, sel.to).trim();
-      const targetSql = selectedText.length > 0 ? selectedText : view.state.doc.toString();
-      onRunRef.current(targetSql);
+      latest.current.onRun(selectedText.length > 0 ? selectedText : view.state.doc.toString());
       return true;
     };
 
-    const state = EditorState.create({
-      doc: value,
-      extensions: [
-        lineNumbers(),
-        highlightActiveLineGutter(),
-        highlightActiveLine(),
-        history(),
-        bracketMatching(),
-        closeBrackets(),
-        autocompletion(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        editorTheme,
-        placeholder ? cmPlaceholder(placeholder) : [],
-        sqlCompartmentRef.current.of(
-          sql({
-            dialect: SQLite,
-            schema: schemaObj,
-            upperCaseKeywords: true,
+    const initial = latest.current;
+    const view = new EditorView({
+      parent: el,
+      state: EditorState.create({
+        doc: initial.value,
+        extensions: [
+          lineNumbers(),
+          highlightActiveLineGutter(),
+          highlightActiveLine(),
+          history(),
+          bracketMatching(),
+          closeBrackets(),
+          autocompletion(),
+          syntaxHighlighting(sqlHighlight),
+          editorTheme,
+          EditorView.contentAttributes.of({ "aria-label": "SQL editor", "aria-multiline": "true" }),
+          initial.placeholder ? cmPlaceholder(initial.placeholder) : [],
+          sqlCompartmentRef.current.of(sqlLang(initial.tables)),
+          keymap.of([
+            { key: "Mod-Enter", run: runCommand },
+            { key: "Shift-Enter", run: runCommand },
+            ...closeBracketsKeymap,
+            ...defaultKeymap,
+            ...historyKeymap,
+          ]),
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) latest.current.onChange(update.state.doc.toString());
           }),
-        ),
-        keymap.of([
-          { key: "Mod-Enter", run: runCommand },
-          { key: "Shift-Enter", run: runCommand },
-          ...closeBracketsKeymap,
-          ...defaultKeymap,
-          ...historyKeymap,
-        ]),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            onChangeRef.current(update.state.doc.toString());
-          }
-        }),
-      ],
+        ],
+      }),
     });
-
-    const view = new EditorView({ state, parent: el });
     viewRef.current = view;
-
     return () => {
       view.destroy();
       viewRef.current = null;
     };
-    // Only mount once; value/schema updates are synced in effects below
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sync external value changes (e.g. clicking a history or snippet item)
+  // External value changes (history / snippet click).
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     const current = view.state.doc.toString();
-    if (current !== value) {
-      view.dispatch({
-        changes: { from: 0, to: current.length, insert: value },
-      });
-    }
+    if (current !== value) view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
   }, [value]);
 
-  // Sync live table/column schema for autocomplete
+  // Live schema for autocomplete.
   useEffect(() => {
-    const view = viewRef.current;
-    if (!view) return;
-    const schemaObj: Record<string, string[]> = {};
-    for (const t of tables) {
-      schemaObj[t.name] = t.columns.map((c) => c.name);
-    }
-    view.dispatch({
-      effects: sqlCompartmentRef.current.reconfigure(
-        sql({
-          dialect: SQLite,
-          schema: schemaObj,
-          upperCaseKeywords: true,
-        }),
-      ),
-    });
+    viewRef.current?.dispatch({ effects: sqlCompartmentRef.current.reconfigure(sqlLang(tables)) });
   }, [tables]);
 
-  return <div ref={containerRef} className="cm-sql-host" data-testid="sql-editor" />;
+  return <div ref={containerRef} className="min-w-0" data-testid="sql-editor" />;
 }

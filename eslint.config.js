@@ -24,13 +24,6 @@ export default tseslint.config(
     },
   },
 
-  // Legacy phase-2 files (DatabaseDetail + tabs) still carry two exhaustive-deps misses.
-  // Phase 2 rewrites these files; remove this block then.
-  {
-    files: ["apps/web/src/components/DataGridTab.tsx", "apps/web/src/pages/DatabaseDetail.tsx"],
-    rules: { "react-hooks/exhaustive-deps": "off" },
-  },
-
   // apps/server + packages/shared: Bun/Node runtime.
   {
     files: ["apps/server/**/*.ts", "packages/shared/**/*.ts"],

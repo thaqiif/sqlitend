@@ -31,14 +31,19 @@ export function Modal({
   children,
 }: ModalProps) {
   return (
-    <HeroModal.Root isOpen onOpenChange={(open) => !open && onClose()}>
-      <HeroModal.Backdrop isDismissable={dismissOnBackdrop} isKeyboardDismissDisabled={!dismissOnEscape}>
-        <HeroModal.Container size={size} placement="auto" scroll="inside">
-          <HeroModal.Dialog aria-label={ariaLabel} className={className}>
-            {children}
-          </HeroModal.Dialog>
-        </HeroModal.Container>
-      </HeroModal.Backdrop>
-    </HeroModal.Root>
+    // Controlled straight on the Backdrop (no Modal.Root): Root is a DialogTrigger, which expects a
+    // trigger child and logs "PressResponder was rendered without a pressable child" without one.
+    <HeroModal.Backdrop
+      isOpen
+      onOpenChange={(open) => !open && onClose()}
+      isDismissable={dismissOnBackdrop}
+      isKeyboardDismissDisabled={!dismissOnEscape}
+    >
+      <HeroModal.Container size={size} placement="auto" scroll="inside">
+        <HeroModal.Dialog aria-label={ariaLabel} className={className}>
+          {children}
+        </HeroModal.Dialog>
+      </HeroModal.Container>
+    </HeroModal.Backdrop>
   );
 }
