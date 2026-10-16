@@ -263,7 +263,9 @@ export function DataGridTab({
   const pendingCount =
     Object.keys(pendingUpdates).length + Object.keys(pendingDeletes).length + pendingInserts.length;
 
-  const generatedSqlPreview = useMemo(() => {
+  // Plain computation, not useMemo: this runs after the early return above,
+  // and a hook here changes the hook count between renders (React #310).
+  const generatedSqlPreview = (() => {
     const lines: string[] = [];
     const qTbl = quoteIdent(activeTable.name);
     for (const ins of pendingInserts) {
@@ -292,7 +294,7 @@ export function DataGridTab({
       lines.push(`DELETE FROM ${qTbl} WHERE ${wherePart};`);
     }
     return lines.join("\n");
-  }, [activeTable.name, pendingInserts, pendingUpdates, pendingDeletes]);
+  })();
 
   const applyPendingChanges = async () => {
     setApplying(true);
