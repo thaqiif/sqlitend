@@ -726,6 +726,117 @@ describe("Phase 1: Schema, Query & Table Rows API + Auth", () => {
       { id: 2, name: "two" },
     ]);
   });
+
+  test("B3: 20k-row table with limit 1000 caps at the source (SELECT * FROM (...) LIMIT 1001), falls back for PRAGMA/EXPLAIN, and guards response body size", async () => {
+    const rawSqlite = sqliteHrana.getSqlite(dbId);
+    rawSqlite.run("CREATE TABLE big_table (id INTEGER PRIMARY KEY, val TEXT)");
+    const ins = rawSqlite.prepare("INSERT INTO big_table (val) VALUES (?)");
+    const seed = rawSqlite.transaction(() => {
+      for (let i = 1; i <= 20_000; i++) {
+        ins.run(`row-${i}`);
+      }
+    });
+    seed();
+
+    const executedBatchSqls: string[] = [];
+    const spyingExecutor: HranaExecutor = {
+      pipeline: (t, stmts, opts) => sqliteHrana.executor.pipeline(t, stmts, opts),
+      batch: async (t, steps, opts) => {
+        for (const s of steps) executedBatchSqls.push(s.stmt.sql);
+        return sqliteHrana.executor.batch(t, steps, opts);
+      },
+    };
+
+    const config = loadConfig({ SQLITEND_DATA_ROOT: tmp, SQLITEND_HOST: "127.0.0.1", SQLITEND_ADMIN_TOKEN: "tok" });
+    const app = createRoutes({
+      config,
+      workspaces: meta.workspaces,
+      databases: meta.databases,
+      tokens: meta.tokens,
+      supervisor: new Supervisor({ config, databases: meta.databases }),
+      sampler: new Sampler(60_000, tmp),
+      sqldOk: true,
+      sqldVersion: "0.24.32",
+      version: "0.1.4-test",
+      auth: { service: new AuthService(meta.auth), repo: meta.auth, adminToken: "tok" },
+      hrana: spyingExecutor,
+    });
+    const headers = { authorization: "Bearer tok", "content-type": "application/json" };
+
+    // 1. SELECT * FROM big_table with limit 1000 -> executor receives wrapped LIMIT 1001 SQL
+    const res = await app.request(`/api/databases/${dbId}/query`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ sql: "SELECT * FROM big_table", limit: 1000 }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      results: { statement: string; rows: unknown[][]; truncated: boolean }[];
+    };
+    expect(body.results[0]!.statement).toBe("SELECT * FROM big_table");
+    expect(body.results[0]!.rows).toHaveLength(1000);
+    expect(body.results[0]!.truncated).toBe(true);
+    expect(executedBatchSqls).toContain("SELECT * FROM (\nSELECT * FROM big_table\n) LIMIT 1001");
+
+    // 2. Non-wrappable statement (PRAGMA / EXPLAIN) falls back to unwrapped SQL + post-slice
+    executedBatchSqls.length = 0;
+    const pragmaRes = await app.request(`/api/databases/${dbId}/query`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ sql: 'PRAGMA table_info("big_table")', limit: 1 }),
+    });
+    expect(pragmaRes.status).toBe(200);
+    const pragmaBody = (await pragmaRes.json()) as {
+      results: { rows: unknown[][]; truncated: boolean }[];
+    };
+    expect(pragmaBody.results[0]!.rows).toHaveLength(1);
+    expect(pragmaBody.results[0]!.truncated).toBe(true);
+    expect(executedBatchSqls).toContain('PRAGMA table_info("big_table")');
+
+    // 3. Second guard: response body size limit in createHttpHranaExecutor returns 413 response_too_large
+    const oversizedHrana = createHttpHranaExecutor(tmp, {
+      maxResponseBytes: 256,
+      fetchImpl: (async () => {
+        const bigPayload = JSON.stringify({
+          results: [
+            {
+              type: "ok",
+              response: {
+                type: "batch",
+                result: {
+                  step_results: [
+                    { cols: [{ name: "x" }], rows: [[{ type: "text", value: "x".repeat(1024) }]], affected_row_count: 0, last_insert_rowid: null },
+                  ],
+                  step_errors: [null],
+                },
+              },
+            },
+          ],
+        });
+        return new Response(bigPayload, { status: 200, headers: { "content-type": "application/json" } });
+      }) as unknown as typeof fetch,
+    });
+    const appOversized = createRoutes({
+      config,
+      workspaces: meta.workspaces,
+      databases: meta.databases,
+      tokens: meta.tokens,
+      supervisor: new Supervisor({ config, databases: meta.databases }),
+      sampler: new Sampler(60_000, tmp),
+      sqldOk: true,
+      sqldVersion: "0.24.32",
+      version: "0.1.4-test",
+      auth: { service: new AuthService(meta.auth), repo: meta.auth, adminToken: "tok" },
+      hrana: oversizedHrana,
+    });
+    const tooBigRes = await appOversized.request(`/api/databases/${dbId}/query`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ sql: "SELECT 1" }),
+    });
+    expect(tooBigRes.status).toBe(413);
+    expect(((await tooBigRes.json()) as { error: { code: string } }).error.code).toBe("response_too_large");
+  });
 });
 
 const sqldPath = path.resolve(import.meta.dir, "../../../../bin/sqld");

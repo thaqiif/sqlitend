@@ -223,12 +223,78 @@ async function getInternalToken(dataRoot: string, dbId: string, dbSlug: string):
   return issued.token;
 }
 
+export const DEFAULT_MAX_HRANA_RESPONSE_BYTES = 16 * 1024 * 1024; // 16 MiB
+
+async function readBoundedJson<T>(
+  res: Response,
+  maxBytes: number,
+  onTooLarge: () => void,
+): Promise<T> {
+  const cl = Number(res.headers.get("content-length") ?? "0");
+  if (Number.isFinite(cl) && cl > maxBytes) {
+    await res.body?.cancel().catch(() => {});
+    onTooLarge();
+    throw new ApiError(
+      413,
+      "response_too_large",
+      `sqld response exceeded maximum allowed size (${maxBytes} bytes)`,
+    );
+  }
+
+  if (!res.body) {
+    const text = await res.text();
+    if (Buffer.byteLength(text, "utf8") > maxBytes) {
+      onTooLarge();
+      throw new ApiError(
+        413,
+        "response_too_large",
+        `sqld response exceeded maximum allowed size (${maxBytes} bytes)`,
+      );
+    }
+    return JSON.parse(text) as T;
+  }
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel().catch(() => {});
+          onTooLarge();
+          throw new ApiError(
+            413,
+            "response_too_large",
+            `sqld response exceeded maximum allowed size (${maxBytes} bytes)`,
+          );
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const merged = Buffer.concat(chunks, totalBytes);
+  return JSON.parse(merged.toString("utf8")) as T;
+}
+
 export function createHttpHranaExecutor(
   dataRoot: string,
-  opts: { upstreamHost?: string; fetchImpl?: typeof fetch; onQuery?: QueryObserver } = {},
+  opts: {
+    upstreamHost?: string;
+    fetchImpl?: typeof fetch;
+    onQuery?: QueryObserver;
+    maxResponseBytes?: number;
+  } = {},
 ): HranaExecutor {
   const host = opts.upstreamHost ?? "127.0.0.1";
   const doFetch = opts.fetchImpl ?? fetch;
+  const maxResponseBytes = opts.maxResponseBytes ?? DEFAULT_MAX_HRANA_RESPONSE_BYTES;
 
   return {
     async pipeline(db, stmts, callOpts = {}) {
@@ -284,7 +350,9 @@ export function createHttpHranaExecutor(
         throw new ApiError(502, "sqld_error", `sqld HTTP ${res.status}`, text || undefined);
       }
 
-      const body = (await res.json()) as HranaPipelineResponse;
+      const body = await readBoundedJson<HranaPipelineResponse>(res, maxResponseBytes, () => {
+        opts.onQuery?.({ dbId: db.id, durationMs: performance.now() - t0, ok: false, isWrite: false });
+      });
       const totalDurationMs = Number((performance.now() - t0).toFixed(2));
       const perStmtMs = stmts.length > 0 ? Number((totalDurationMs / stmts.length).toFixed(2)) : 0;
 
@@ -380,7 +448,9 @@ export function createHttpHranaExecutor(
         throw new ApiError(502, "sqld_error", `sqld HTTP ${res.status}`, text || undefined);
       }
 
-      const body = (await res.json()) as HranaPipelineResponse;
+      const body = await readBoundedJson<HranaPipelineResponse>(res, maxResponseBytes, () => {
+        opts.onQuery?.({ dbId: db.id, durationMs: performance.now() - t0, ok: false, isWrite: false });
+      });
       const totalDurationMs = Number((performance.now() - t0).toFixed(2));
       const perStmtMs = steps.length > 0 ? Number((totalDurationMs / steps.length).toFixed(2)) : 0;
 
@@ -625,6 +695,34 @@ export function quoteIdent(ident: string): string {
   return `"${ident.replace(/"/g, '""')}"`;
 }
 
+/**
+ * Returns true if `stmt` is a read query (`SELECT`, `VALUES`, or `WITH ... SELECT`)
+ * that can be safely wrapped as `SELECT * FROM (<stmt>) LIMIT <cap+1>` so sqld
+ * caps rows at the source instead of materializing the full table in memory.
+ * Statements like `PRAGMA` and `EXPLAIN` cannot be wrapped as subqueries and
+ * fall back to post-fetch slicing.
+ */
+export function canWrapWithSourceLimit(stmt: string): boolean {
+  const cleaned = stripSqlComments(stmt);
+  if (!cleaned) return false;
+  const firstMatch = /^([A-Za-z]+)/.exec(cleaned);
+  if (!firstMatch) return false;
+  const verb = firstMatch[1]!.toUpperCase();
+  if (verb !== "SELECT" && verb !== "VALUES" && verb !== "WITH") {
+    return false;
+  }
+  if (WRITE_KEYWORDS_RE.test(cleaned)) {
+    return false;
+  }
+  return true;
+}
+
+export function wrapStatementWithLimit(stmt: string, limit: number): string {
+  const safeLimit = Math.min(10_000, Math.max(1, Math.trunc(limit)));
+  if (!canWrapWithSourceLimit(stmt)) return stmt;
+  return `SELECT * FROM (\n${stmt}\n) LIMIT ${safeLimit + 1}`;
+}
+
 // ---------------------------------------------------------------------------
 // High-Level Operations: Query, Schema, and Structured Table Rows
 // ---------------------------------------------------------------------------
@@ -654,16 +752,17 @@ export async function runSqlQuery(
 
   const posArgs = Array.isArray(req.params) ? req.params : undefined;
   const namedArgs = req.params && !Array.isArray(req.params) ? req.params : undefined;
+  const limit = Math.min(10_000, Math.max(1, req.limit ?? 1000));
 
   // Execute via a Hrana `batch` with step conditions so execution stops at the
   // first failing statement:
   //   • readOnly = true:
   //       step 0: BEGIN DEFERRED
-  //       step i (1..M): statements[i-1], conditioned on { type: "ok", step: i - 1 }
+  //       step i (1..M): statements[i-1] (wrapped in LIMIT cap+1 when supported), conditioned on { type: "ok", step: i - 1 }
   //       step M+1: ROLLBACK, conditioned on { type: "ok", step: 0 }
   //   • readOnly = false:
   //       no implicit transaction (the user may write their own BEGIN/COMMIT),
-  //       step i (0..M-1): statements[i], conditioned on { type: "ok", step: i - 1 } (for i > 0)
+  //       step i (0..M-1): statements[i] (wrapped in LIMIT cap+1 if it is a SELECT/WITH/VALUES), conditioned on { type: "ok", step: i - 1 } (for i > 0)
   //       step M: ROLLBACK conditioned on { type: "and", conds: [{ type: "not", cond: { type: "ok", step: M - 1 } }, { type: "not", cond: { type: "is_autocommit" } }] }
   //       so if any step fails while a user transaction is open, it is rolled back.
   const steps: HranaBatchStep[] = [];
@@ -673,7 +772,7 @@ export async function runSqlQuery(
       steps.push({
         condition: { type: "ok", step: i },
         stmt: {
-          sql: statements[i]!,
+          sql: wrapStatementWithLimit(statements[i]!, limit),
           ...(statements.length === 1 && posArgs ? { args: posArgs } : {}),
           ...(statements.length === 1 && namedArgs ? { namedArgs } : {}),
           wantRows: true,
@@ -689,7 +788,7 @@ export async function runSqlQuery(
       steps.push({
         ...(i > 0 ? { condition: { type: "ok", step: i - 1 } } : {}),
         stmt: {
-          sql: statements[i]!,
+          sql: wrapStatementWithLimit(statements[i]!, limit),
           ...(statements.length === 1 && posArgs ? { args: posArgs } : {}),
           ...(statements.length === 1 && namedArgs ? { namedArgs } : {}),
           wantRows: true,
@@ -719,7 +818,6 @@ export async function runSqlQuery(
   const userOutcomes = readOnly
     ? outcomes.slice(1, 1 + statements.length)
     : outcomes.slice(0, statements.length);
-  const limit = Math.min(10_000, Math.max(1, req.limit ?? 1000));
 
   let failedIdx = -1;
   let failedError: { message: string; code?: string } | null = null;
