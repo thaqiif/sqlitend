@@ -144,9 +144,6 @@ export function installAuth(app: Hono<AppEnv>, auth: AuthDeps): void {
       return { ok: true, session: null };
     }
     const cookieVal = getCookie(c, SESSION_COOKIE);
-    if (cookieVal && adminToken && constantTimeTokenMatch(cookieVal, adminToken)) {
-      return { ok: true, session: null };
-    }
     const s = service.validate(cookieVal);
     return { ok: !!s, session: s };
   };

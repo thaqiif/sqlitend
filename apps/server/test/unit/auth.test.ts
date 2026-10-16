@@ -186,6 +186,21 @@ describe("control-plane auth", () => {
     expect(ok.cookie).toBeTruthy();
   });
 
+  test("B5: raw admin token in sqlitend_session cookie is rejected with 401", async () => {
+    const service = new AuthService(repo, { now: () => clock });
+    const { send, login } = makeApp(service, "raw-admin-secret-xyz");
+
+    // Passing the raw admin token directly as the session cookie value must fail with 401
+    const rawCookieRes = await send("GET", "/api/workspaces", { cookie: "raw-admin-secret-xyz" });
+    expect(rawCookieRes.status).toBe(401);
+
+    // Only a session id issued by POST /api/auth/login is accepted as a cookie
+    const { res, cookie } = await login({ token: "raw-admin-secret-xyz" });
+    expect(res.status).toBe(200);
+    expect(cookie).not.toBe("raw-admin-secret-xyz");
+    expect((await send("GET", "/api/workspaces", { cookie })).status).toBe(200);
+  });
+
   test("sessions: idle timeout, absolute limit, logout, and password change end them", async () => {
     await setPassword();
     const service = new AuthService(repo, { now: () => clock, idleMs: 3_600_000, absoluteMs: 3 * 3_600_000 });
