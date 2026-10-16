@@ -166,15 +166,25 @@ export class AuthService {
 
   /**
    * Authenticate with SQLITEND_ADMIN_TOKEN in constant time, honoring per-IP
-   * throttling and issuing an HttpOnly session cookie.
+   * throttling and requiring TOTP when enabled before issuing an HttpOnly
+   * session cookie.
    */
-  loginWithAdminToken(input: { token: string; expectedToken: string; ip: string; userAgent?: string | null }): LoginResult {
+  loginWithAdminToken(input: { token: string; expectedToken: string; totp?: string; ip: string; userAgent?: string | null }): LoginResult {
     const now = this.now();
     const wait = this.throttled(input.ip, now);
     if (wait !== null) return { ok: false, reason: "throttled", retryAfterSec: wait };
     const refund = this.reserveFailure(input.ip, now);
     if (!constantTimeTokenMatch(input.token, input.expectedToken)) {
       return { ok: false, reason: "invalid" };
+    }
+    const admin = this.repo.getAdmin();
+    if (admin?.totp_secret) {
+      if (!input.totp) {
+        refund();
+        return { ok: false, reason: "totp_required" };
+      }
+      const step = matchTotp(admin.totp_secret, input.totp, now);
+      if (step === null || !this.repo.claimTotpStep(step)) return { ok: false, reason: "invalid" };
     }
     refund();
     this.failures.delete(input.ip);

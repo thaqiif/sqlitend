@@ -206,7 +206,7 @@ export function installAuth(app: Hono<AppEnv>, auth: AuthDeps): void {
     // verify against adminToken in constant time.
     let r: Awaited<ReturnType<AuthService["login"]>>;
     if (adminToken && (body.token !== undefined || (!service.setupDone && body.password !== undefined) || constantTimeTokenMatch(candidateSecret, adminToken))) {
-      r = service.loginWithAdminToken({ token: candidateSecret, expectedToken: adminToken, ip, userAgent });
+      r = service.loginWithAdminToken({ token: candidateSecret, expectedToken: adminToken, totp: body.totp, ip, userAgent });
     } else {
       r = await service.login({ password: candidateSecret, totp: body.totp, ip, userAgent });
     }

@@ -54,9 +54,9 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function makeApp(service = new AuthService(repo, { now: () => clock })) {
+function makeApp(service = new AuthService(repo, { now: () => clock }), adminToken: string | null = null) {
   const app = createRoutes({
-    config: loadConfig({}, { dataRoot: dir }),
+    config: loadConfig(adminToken ? { SQLITEND_ADMIN_TOKEN: adminToken } : {}, { dataRoot: dir }),
     workspaces: new WorkspacesRepo(db),
     databases: new DatabasesRepo(db),
     tokens: new TokensRepo(db),
@@ -65,7 +65,7 @@ function makeApp(service = new AuthService(repo, { now: () => clock })) {
     sqldOk: true,
     sqldVersion: "fake",
     version: "test",
-    auth: { service, repo },
+    auth: { service, repo, adminToken },
   });
   const send = (method: string, p: string, o: { body?: unknown; cookie?: string; csrf?: boolean; ip?: string } = {}) =>
     app.request(
@@ -161,6 +161,29 @@ describe("control-plane auth", () => {
     expect((await login({ password: PASSWORD, totp: "000000" })).res.status).toBe(401);
     const ok = await login({ password: PASSWORD, totp: totpAt(secret, clock) });
     expect(ok.res.status).toBe(200);
+  });
+
+  test("B4: admin-token cookie login also requires TOTP when totpEnabled", async () => {
+    await setPassword();
+    const secret = base32Encode(Buffer.from("12345678901234567890"));
+    repo.setTotpSecret(secret);
+    const service = new AuthService(repo, { now: () => clock });
+    const { login } = makeApp(service, "my-admin-token-999");
+
+    // Missing TOTP on admin-token cookie login -> 401 totp_required
+    const noTotp = await login({ token: "my-admin-token-999" });
+    expect(noTotp.res.status).toBe(401);
+    expect(((await noTotp.res.json()) as { error: { code: string } }).error.code).toBe("totp_required");
+
+    // Wrong TOTP on admin-token cookie login -> 401 invalid_credentials
+    const badTotp = await login({ token: "my-admin-token-999", totp: "000000" });
+    expect(badTotp.res.status).toBe(401);
+    expect(((await badTotp.res.json()) as { error: { code: string } }).error.code).toBe("invalid_credentials");
+
+    // Valid TOTP on admin-token cookie login -> 200 and session cookie issued
+    const ok = await login({ token: "my-admin-token-999", totp: totpAt(secret, clock) });
+    expect(ok.res.status).toBe(200);
+    expect(ok.cookie).toBeTruthy();
   });
 
   test("sessions: idle timeout, absolute limit, logout, and password change end them", async () => {

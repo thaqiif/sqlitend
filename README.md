@@ -116,6 +116,7 @@ sqlitend audit 50          # last 50 audit entries
 
 - **Sessions:** an HttpOnly, SameSite=Strict cookie. It ends after 12 h idle or 7 days, and on
   logout, a password or TOTP change, or `revoke-sessions`. Only a hash of the session id is stored.
+- **Admin token (`SQLITEND_ADMIN_TOKEN`):** can be sent as `Authorization: Bearer <token>` for programmatic API calls (token-only), or submitted to `POST /api/auth/login` to issue a browser session cookie. When TOTP is enabled (`sqlitend enable-totp`), cookie login with the admin token also requires a valid TOTP code.
 - **Throttling:** 5 failed logins per IP (and 50 overall) within 15 minutes → `429` until the
   window passes.
 - **CSRF:** every state-changing API call must send `X-Sqlitend-Csrf: 1` (the UI does this).
