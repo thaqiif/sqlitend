@@ -364,4 +364,88 @@ describe("supervisor termination", () => {
       expect(databases.getById(secondRow.id)?.status).toBe("running");
     });
   });
+
+  skipIfNotLinux("B6: restart_count increments on every successful start from stopped, crashed, or failed (not just after a crash)", async () => {
+    const root = rootDir();
+    const metadata = openMetadata(path.join(root, "metadata.sqlite"));
+    metadata.workspaces.create({ id: "ws", slug: "supervisor-tests", name: "supervisor", createdAt: Date.now() });
+
+    const scriptPath = path.join(root, "fake-listening-sqld.mjs");
+    writeFileSync(
+      scriptPath,
+      `#!/usr/bin/env bun
+if (process.argv.includes("--version")) {
+  console.log("sqld-fake 0.24.32");
+  process.exit(0);
+}
+const addrIdx = process.argv.indexOf("--http-listen-addr");
+const addr = addrIdx !== -1 ? process.argv[addrIdx + 1] : "127.0.0.1:29190";
+const port = Number(addr.split(":")[1]);
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port,
+  fetch() {
+    return new Response("ok", { status: 200 });
+  },
+});
+process.on("SIGTERM", () => {
+  server.stop(true);
+  process.exit(0);
+});
+setInterval(() => {}, 60000);
+`,
+      { mode: 0o755 },
+    );
+
+    const config = loadConfig({}, {
+      dataRoot: root,
+      sqldPath: scriptPath,
+      readyTimeoutMs: 2000,
+      portRange: { start: 29191, end: 29198 },
+    });
+    const supervisor = new Supervisor({ config, databases: metadata.databases, metrics: metadata.metrics });
+    try {
+      const row = makeRow(metadata.databases, root, {
+        status: "starting",
+        port: 29191,
+        grpc_port: 29192,
+      });
+
+      // 1. Initial launch from `starting` (creation) -> restart_count remains 0
+      const start1 = await supervisor.startDatabase(row.id, {
+        port: 29191,
+        grpcPort: 29192,
+        dataDir: row.data_dir,
+      });
+      expect(start1.ok).toBe(true);
+      expect(metadata.databases.getById(row.id)?.restart_count).toBe(0);
+
+      // 2. Stop and start again from `stopped` (with 0 crashes!) -> restart_count = 1
+      await supervisor.stopDatabase(row.id);
+      expect(metadata.databases.getById(row.id)?.status).toBe("stopped");
+      expect(metadata.databases.getById(row.id)?.crash_count).toBe(0);
+
+      const start2 = await supervisor.startDatabase(row.id, {
+        port: 29191,
+        grpcPort: 29192,
+        dataDir: row.data_dir,
+      });
+      expect(start2.ok).toBe(true);
+      expect(metadata.databases.getById(row.id)?.restart_count).toBe(1);
+
+      // 3. Stop, mark `failed`, and start again -> restart_count = 2
+      await supervisor.stopDatabase(row.id);
+      metadata.databases.updateStatus(row.id, "failed");
+      const start3 = await supervisor.startDatabase(row.id, {
+        port: 29191,
+        grpcPort: 29192,
+        dataDir: row.data_dir,
+      });
+      expect(start3.ok).toBe(true);
+      expect(metadata.databases.getById(row.id)?.restart_count).toBe(2);
+    } finally {
+      await supervisor.shutdown();
+      metadata.db.close();
+    }
+  });
 });

@@ -238,6 +238,10 @@ export class DatabasesRepo {
     this.db.query("UPDATE databases SET last_write_at = ? WHERE id = ?").run(at, dbId);
   }
 
+  incrementRestartCount(dbId: string): void {
+    this.db.query("UPDATE databases SET restart_count = restart_count + 1 WHERE id = ?").run(dbId);
+  }
+
   /** Record the Cloudflare DNS state for a database (straight SET, clearable). */
   setDns(dbId: string, dns: { hostname: string | null; recordId: string | null; status: string | null; error: string | null }): void {
     this.db

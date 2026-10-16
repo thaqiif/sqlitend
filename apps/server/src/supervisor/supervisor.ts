@@ -279,11 +279,22 @@ export class Supervisor {
       return { ok: false, error: res.error, stderrTail: res.stderrTail };
     }
 
-    const wasPreviouslyStarted = row.status === "crashed" || row.status === "failed" || row.status === "stopped";
+    // Every successful start from a stopped/crashed/failed state (or relaunch
+    // of a stale running row on boot reconcile) is a restart; only the initial
+    // creation launch (`row.status === "starting"`) is not a restart.
+    const isRestart =
+      row.status === "stopped" ||
+      row.status === "crashed" ||
+      row.status === "failed" ||
+      row.status === "running";
     this.deps.databases.setFailedReason(dbId, null);
     this.persistRuntime(dbId, { status: "running", sqld_version: res.sqldVersionAtLaunch });
-    if (wasPreviouslyStarted && (row.crash_count ?? 0) > 0) {
-      this.deps.metrics?.recordRestart(dbId);
+    if (isRestart) {
+      if (this.deps.databases.incrementRestartCount) {
+        this.deps.databases.incrementRestartCount(dbId);
+      } else {
+        this.deps.metrics?.recordRestart(dbId);
+      }
     }
     return { ok: true, pid: res.pid };
   }
@@ -296,6 +307,9 @@ export class Supervisor {
     await this.withLock(dbId, async () => {
       const row = this.deps.databases.getById(dbId);
       if (row?.status === "deleting") return;
+      // Mark `stopped` before terminating so the child exit handler's
+      // `markCrashedIfLive` guard knows this is an intentional stop, not a crash.
+      this.persistRuntime(dbId, { status: "stopped" });
       const child = this.children.get(dbId);
       if (child && child.exitCode == null) {
         await terminateGracefully(child, GRACE_MS);
@@ -306,7 +320,6 @@ export class Supervisor {
       }
       this.adoptedPids.delete(dbId);
       this.children.delete(dbId);
-      this.persistRuntime(dbId, { status: "stopped" });
       // clear the (coalesced) pid/start_time so a stopped DB exposes no stale pid.
       this.deps.databases.clearRuntime(dbId);
     });

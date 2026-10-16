@@ -75,7 +75,7 @@ export default function MetricsTab({
               </span>
               <strong>24h Availability: {stability.availabilityPct24h.toFixed(2)}%</strong>
               <span className="muted small">
-                · {stability.crashes24h} crash{stability.crashes24h === 1 ? "" : "es"} in 24h ({stability.totalCrashes} total, {stability.restartCount} restart{stability.restartCount === 1 ? "" : "s"})
+                · {stability.crashes24h} crash{stability.crashes24h === 1 ? "" : "es"} in 24h ({stability.totalCrashes} total, {stability.restartCount} total restart{stability.restartCount === 1 ? "" : "s"})
               </span>
             </div>
             <span className="muted small" title={stability.rule}>
