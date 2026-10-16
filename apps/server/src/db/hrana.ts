@@ -723,6 +723,21 @@ export function wrapStatementWithLimit(stmt: string, limit: number): string {
   return `SELECT * FROM (\n${stmt}\n) LIMIT ${safeLimit + 1}`;
 }
 
+/**
+ * Undo SQLite's renaming of duplicate columns in a subquery (`SELECT a.id, b.id`
+ * wrapped by `wrapStatementWithLimit` comes back as `id`, `id:1`), so the console
+ * shows the names the user's own statement produces.
+ */
+export function restoreWrappedColumnNames(columns: string[]): string[] {
+  const seen = new Set<string>();
+  return columns.map((name) => {
+    const m = /^(.*):\d+$/.exec(name);
+    const out = m && seen.has(m[1]!) ? m[1]! : name;
+    seen.add(out);
+    return out;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // High-Level Operations: Query, Schema, and Structured Table Rows
 // ---------------------------------------------------------------------------
@@ -832,7 +847,7 @@ export async function runSqlQuery(
         statement: statements[idx]!,
         status: "ok",
         error: null,
-        columns: r.columns,
+        columns: canWrapWithSourceLimit(statements[idx]!) ? restoreWrappedColumnNames(r.columns) : r.columns,
         columnTypes: r.columnTypes,
         rows,
         rowsAffected: r.rowsAffected,

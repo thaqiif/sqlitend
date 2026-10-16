@@ -289,13 +289,7 @@ export class Supervisor {
       row.status === "running";
     this.deps.databases.setFailedReason(dbId, null);
     this.persistRuntime(dbId, { status: "running", sqld_version: res.sqldVersionAtLaunch });
-    if (isRestart) {
-      if (this.deps.databases.incrementRestartCount) {
-        this.deps.databases.incrementRestartCount(dbId);
-      } else {
-        this.deps.metrics?.recordRestart(dbId);
-      }
-    }
+    if (isRestart) this.deps.databases.incrementRestartCount(dbId);
     return { ok: true, pid: res.pid };
   }
 

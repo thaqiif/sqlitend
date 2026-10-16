@@ -74,12 +74,6 @@ export class MetricsRepo {
       .run(at, reason, dbId);
   }
 
-  recordRestart(dbId: string): void {
-    this.db
-      .query("UPDATE databases SET restart_count = restart_count + 1 WHERE id = ?")
-      .run(dbId);
-  }
-
   countCrashesSince(dbId: string, sinceMs: number): number {
     const row = this.db
       .query("SELECT COUNT(*) AS n FROM crash_events WHERE database_id = ? AND at >= ?")

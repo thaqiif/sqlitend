@@ -778,6 +778,16 @@ describe("Phase 1: Schema, Query & Table Rows API + Auth", () => {
     expect(body.results[0]!.truncated).toBe(true);
     expect(executedBatchSqls).toContain("SELECT * FROM (\nSELECT * FROM big_table\n) LIMIT 1001");
 
+    // 1b. Wrapping must not rename duplicate columns (SQLite reports them as "id", "id:1")
+    const dupRes = await app.request(`/api/databases/${dbId}/query`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ sql: "SELECT a.id, b.id, 1 AS \"x:1\" FROM big_table a JOIN big_table b ON b.id = a.id LIMIT 1" }),
+    });
+    expect(dupRes.status).toBe(200);
+    const dupBody = (await dupRes.json()) as { results: { columns: string[] }[] };
+    expect(dupBody.results[0]!.columns).toEqual(["id", "id", "x:1"]);
+
     // 2. Non-wrappable statement (PRAGMA / EXPLAIN) falls back to unwrapped SQL + post-slice
     executedBatchSqls.length = 0;
     const pragmaRes = await app.request(`/api/databases/${dbId}/query`, {
