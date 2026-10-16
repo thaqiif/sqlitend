@@ -71,6 +71,8 @@ export interface Config {
   gatewayMaxBodyBytes: number;
   /** Control-plane login. false only for loopback-bound local development. */
   authEnabled: boolean;
+  /** Optional static operator token (SQLITEND_ADMIN_TOKEN) for Bearer/session auth. */
+  adminToken: string | null;
   /** Client-IP source when the control plane sits behind a local proxy/tunnel:
    *  "off" = socket peer; "cloudflare" = CF-Connecting-IP; "xff" = last X-Forwarded-For hop.
    *  Headers are only honoured when the socket peer is loopback. */
@@ -152,12 +154,34 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     ...loadGatewayConfig(env),
     cloudflareDns: loadCloudflareDnsConfig(env),
     authEnabled: loadAuthEnabled(env, host),
+    adminToken: env.SQLITEND_ADMIN_TOKEN?.trim() || null,
     trustProxy: oneOf("SQLITEND_TRUST_PROXY", env.SQLITEND_TRUST_PROXY, ["off", "cloudflare", "xff"] as const, "off"),
     backup: loadBackupConfig(env),
     cookieSecure: oneOf("SQLITEND_COOKIE_SECURE", env.SQLITEND_COOKIE_SECURE, ["auto", "on"] as const, "auto"),
     dashboardHosts: parseHostList("SQLITEND_DASHBOARD_HOSTS", env.SQLITEND_DASHBOARD_HOSTS),
     ...overrides,
   };
+}
+
+export function isLoopbackHost(host: string): boolean {
+  return host === "127.0.0.1" || host === "::1" || host === "localhost";
+}
+
+/**
+ * Refuse to start on a non-loopback address unless SQLITEND_ADMIN_TOKEN is set
+ * (or an admin password has already been provisioned in metadata.sqlite).
+ */
+export function assertStartupAuth(config: Pick<Config, "host" | "authEnabled" | "adminToken">, hasAdminPassword = false): void {
+  if (!isLoopbackHost(config.host)) {
+    if (!config.authEnabled) {
+      throw new Error(`SQLITEND_AUTH=off is only allowed with a loopback SQLITEND_HOST (got ${config.host})`);
+    }
+    if (!config.adminToken && !hasAdminPassword) {
+      throw new Error(
+        `refusing to start on non-loopback host (${config.host}) without SQLITEND_ADMIN_TOKEN set (or an admin password configured via \`sqlitend set-password\`)`,
+      );
+    }
+  }
 }
 
 function loadGatewayConfig(env: NodeJS.ProcessEnv): Pick<Config, "gatewayPort" | "gatewayHost" | "gatewayHostTemplate" | "gatewayMaxBodyBytes"> {

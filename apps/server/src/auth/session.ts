@@ -16,12 +16,24 @@
 // • TOTP codes are single-use: the accepted time step is claimed atomically.
 // ---------------------------------------------------------------------------
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { AuthRepo, SessionRow } from "../db/repos/auth.ts";
 import { matchTotp } from "./totp.ts";
 
 export const SESSION_COOKIE = "sqlitend_session";
 export const MIN_PASSWORD_LENGTH = 12;
+
+/**
+ * Constant-time comparison of an untrusted secret against an expected secret.
+ * Hashes both with SHA-256 first so timingSafeEqual always compares 32-byte
+ * buffers without leaking expected secret length.
+ */
+export function constantTimeTokenMatch(candidate: string | undefined | null, expected: string | undefined | null): boolean {
+  if (!expected || !candidate) return false;
+  const a = createHash("sha256").update(candidate, "utf8").digest();
+  const b = createHash("sha256").update(expected, "utf8").digest();
+  return timingSafeEqual(a, b);
+}
 
 export interface AuthOptions {
   idleMs?: number;
@@ -149,15 +161,35 @@ export class AuthService {
     }
     refund();
     this.failures.delete(input.ip);
+    return this.issueSession(now, input.ip, input.userAgent);
+  }
 
+  /**
+   * Authenticate with SQLITEND_ADMIN_TOKEN in constant time, honoring per-IP
+   * throttling and issuing an HttpOnly session cookie.
+   */
+  loginWithAdminToken(input: { token: string; expectedToken: string; ip: string; userAgent?: string | null }): LoginResult {
+    const now = this.now();
+    const wait = this.throttled(input.ip, now);
+    if (wait !== null) return { ok: false, reason: "throttled", retryAfterSec: wait };
+    const refund = this.reserveFailure(input.ip, now);
+    if (!constantTimeTokenMatch(input.token, input.expectedToken)) {
+      return { ok: false, reason: "invalid" };
+    }
+    refund();
+    this.failures.delete(input.ip);
+    return this.issueSession(now, input.ip, input.userAgent);
+  }
+
+  private issueSession(now: number, ip: string, userAgent?: string | null): LoginResult {
     const sessionId = randomBytes(32).toString("base64url");
     const session: SessionRow = {
       id_hash: hashSessionId(sessionId),
       created_at: now,
       last_seen_at: now,
       expires_at: now + this.absoluteMs,
-      ip: input.ip,
-      user_agent: input.userAgent?.slice(0, 256) ?? null,
+      ip,
+      user_agent: userAgent?.slice(0, 256) ?? null,
     };
     this.repo.pruneSessions(now, this.idleMs);
     this.repo.createSession(session);

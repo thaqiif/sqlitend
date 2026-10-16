@@ -8,15 +8,36 @@ import {
   CreateTokenSchema,
   CreateWorkspaceSchema,
   DatabaseSchema,
+  DeleteRowsRequestSchema,
+  InsertRowsRequestSchema,
+  QueryRequestSchema,
+  TableFilterSchema,
+  UpdateRowsRequestSchema,
   type CreateWorkspace,
   type DatabaseStatus,
   type Database as DatabaseDto,
   type Connection,
+  type DeleteRowsRequest,
   type ErrorBody,
+  type InsertRowsRequest,
   type Metrics,
+  type QueryRequest,
   type SystemInfo,
+  type TableFilter,
+  type UpdateRowsRequest,
   type Workspace,
 } from "@sqlitend/shared";
+import { z } from "zod";
+import {
+  browseTableRows,
+  createHttpHranaExecutor,
+  deleteTableRows,
+  inspectDatabaseSchema,
+  insertTableRows,
+  runSqlQuery,
+  updateTableRows,
+  type HranaExecutor,
+} from "../db/hrana.ts";
 import type { Config } from "../config.ts";
 import type { WorkspacesRepo } from "../db/repos/workspaces.ts";
 import type { DatabasesRepo, DatabaseRow as DbRow } from "../db/repos/databases.ts";
@@ -176,10 +197,13 @@ export interface RoutesDeps {
   verify?: { service: VerifyService; results: VerificationsRepo; maxAgeMs: number; startedAt?: number } | null;
   /** Control-plane login; absent only with SQLITEND_AUTH=off (loopback dev). */
   auth?: AuthDeps | null;
+  /** Optional custom Hrana executor (for tests or metrics hooks). */
+  hrana?: HranaExecutor;
 }
 
 export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  const hrana = d.hrana ?? createHttpHranaExecutor(d.config.dataRoot);
   const hostTemplate = d.config.gatewayHostTemplate ? parseHostTemplate(d.config.gatewayHostTemplate) : null;
   /** Database DTO plus its public gateway URL (null without a gateway). */
   const toDto = (r: DbRow): DatabaseDto => ({
@@ -372,6 +396,105 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
       dbName: row.slug,
     };
     return c.json(conn);
+  });
+
+  // ---- db client: schema, sql query, table rows ---------------------------
+  app.get("/api/databases/:id/schema", async (c) => {
+    const row = requireRunningDb(c.req.param("id"));
+    const schema = await inspectDatabaseSchema(hrana, { id: row.id, slug: row.slug, port: row.port! });
+    return c.json(schema);
+  });
+
+  app.post("/api/databases/:id/query", async (c) => {
+    const row = requireRunningDb(c.req.param("id"));
+    let body: QueryRequest;
+    try {
+      body = QueryRequestSchema.parse(await c.req.json());
+    } catch (err) {
+      throw new ApiError(400, "bad_request", "invalid query payload", zodDetail(err));
+    }
+    const res = await runSqlQuery(hrana, { id: row.id, slug: row.slug, port: row.port! }, body);
+    return c.json(res);
+  });
+
+  app.get("/api/databases/:id/tables/:table/rows", async (c) => {
+    const row = requireRunningDb(c.req.param("id"));
+    const table = c.req.param("table");
+    const rawLimit = c.req.query("limit");
+    const rawOffset = c.req.query("offset");
+    const sort = c.req.query("sort") || undefined;
+    const rawDir = c.req.query("dir");
+    const rawFilters = c.req.query("filters");
+
+    const limit = rawLimit === undefined ? 100 : Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+      throw new ApiError(400, "bad_request", "limit must be an integer between 1 and 1000");
+    }
+    const offset = rawOffset === undefined ? 0 : Number(rawOffset);
+    if (!Number.isInteger(offset) || offset < 0) {
+      throw new ApiError(400, "bad_request", "offset must be a non-negative integer");
+    }
+    if (rawDir !== undefined && rawDir !== "asc" && rawDir !== "desc") {
+      throw new ApiError(400, "bad_request", "dir must be asc or desc");
+    }
+
+    let filters: TableFilter[] = [];
+    if (rawFilters) {
+      try {
+        const parsed = JSON.parse(rawFilters);
+        filters = z.array(TableFilterSchema).max(50).parse(parsed);
+      } catch (err) {
+        throw new ApiError(400, "bad_request", "invalid filters query parameter", zodDetail(err));
+      }
+    }
+
+    const res = await browseTableRows(hrana, { id: row.id, slug: row.slug, port: row.port! }, table, {
+      limit,
+      offset,
+      sort,
+      dir: rawDir as "asc" | "desc" | undefined,
+      filters,
+    });
+    return c.json(res);
+  });
+
+  app.post("/api/databases/:id/tables/:table/rows", async (c) => {
+    const row = requireRunningDb(c.req.param("id"));
+    const table = c.req.param("table");
+    let body: InsertRowsRequest;
+    try {
+      body = InsertRowsRequestSchema.parse(await c.req.json());
+    } catch (err) {
+      throw new ApiError(400, "bad_request", "invalid insert rows payload", zodDetail(err));
+    }
+    const res = await insertTableRows(hrana, { id: row.id, slug: row.slug, port: row.port! }, table, body);
+    return c.json(res, 201);
+  });
+
+  app.patch("/api/databases/:id/tables/:table/rows", async (c) => {
+    const row = requireRunningDb(c.req.param("id"));
+    const table = c.req.param("table");
+    let body: UpdateRowsRequest;
+    try {
+      body = UpdateRowsRequestSchema.parse(await c.req.json());
+    } catch (err) {
+      throw new ApiError(400, "bad_request", "invalid update rows payload", zodDetail(err));
+    }
+    const res = await updateTableRows(hrana, { id: row.id, slug: row.slug, port: row.port! }, table, body);
+    return c.json(res);
+  });
+
+  app.delete("/api/databases/:id/tables/:table/rows", async (c) => {
+    const row = requireRunningDb(c.req.param("id"));
+    const table = c.req.param("table");
+    let body: DeleteRowsRequest;
+    try {
+      body = DeleteRowsRequestSchema.parse(await c.req.json());
+    } catch (err) {
+      throw new ApiError(400, "bad_request", "invalid delete rows payload", zodDetail(err));
+    }
+    const res = await deleteTableRows(hrana, { id: row.id, slug: row.slug, port: row.port! }, table, body);
+    return c.json(res);
   });
 
   // ---- backups ------------------------------------------------------------
@@ -676,6 +799,14 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
   function requireDb(id: string): DbRow {
     const row = d.databases.getById(id);
     if (!row) throw new ApiError(404, "not_found", "database not found");
+    return row;
+  }
+
+  function requireRunningDb(id: string): DbRow {
+    const row = requireDb(id);
+    if (row.status !== "running" || !row.port) {
+      throw new ApiError(409, "not_running", `database is ${row.status} — start it to inspect schema or run queries`);
+    }
     return row;
   }
 }

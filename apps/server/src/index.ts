@@ -21,7 +21,7 @@
 import { Hono } from "hono";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { loadConfig } from "./config.ts";
+import { loadConfig, assertStartupAuth } from "./config.ts";
 import { openMetadata, type Metadata } from "./db/metadata.ts";
 import { Supervisor } from "./supervisor/supervisor.ts";
 import { sqldVersion } from "./supervisor/launcher.ts";
@@ -71,6 +71,14 @@ const metadata: Metadata = await (async () => {
   }
 })();
 const { workspaces, databases, tokens, auth: authRepo } = metadata;
+
+try {
+  assertStartupAuth(config, authRepo.getAdmin() !== null);
+} catch (err) {
+  console.error(`[boot] FATAL: ${(err as Error).message}`);
+  metadata.db.close();
+  throw err;
+}
 
 // ---------------------------------------------------------------------------
 // sqld boot smoke
@@ -262,8 +270,9 @@ if (!config.authEnabled) {
       ? `[auth] WARNING: SQLITEND_AUTH=off — NO LOGIN. Anyone who reaches ${config.dashboardHosts.join(", ")} has full admin power: it MUST sit behind Cloudflare Access (or equivalent).`
       : "[auth] WARNING: SQLITEND_AUTH=off — the control plane has no login (anyone with loopback access is admin)",
   );
+} else if (!authService!.setupDone && !config.adminToken) {
+  console.warn("[auth] no admin password or SQLITEND_ADMIN_TOKEN yet — run `sqlitend set-password` or set SQLITEND_ADMIN_TOKEN to enable the dashboard");
 }
-else if (!authService!.setupDone) console.warn("[auth] no admin password yet — run `sqlitend set-password` to enable the dashboard");
 
 const routes = createRoutes({
   backup: replicator,
@@ -271,7 +280,7 @@ const routes = createRoutes({
   importer,
   control,
   verify: verifier ? { service: verifier, results: verifications, maxAgeMs: config.backup!.verifyMaxAgeMs, startedAt: verifier.startedAt } : null,
-  auth: authService ? { service: authService, repo: authRepo, cookieSecure: config.cookieSecure } : null,
+  auth: authService ? { service: authService, repo: authRepo, cookieSecure: config.cookieSecure, adminToken: config.adminToken } : null,
   auditRepo: authRepo,
   dns,
   config,

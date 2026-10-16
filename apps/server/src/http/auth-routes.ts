@@ -8,7 +8,7 @@ import type { Context, Hono, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import type { AuthRepo } from "../db/repos/auth.ts";
-import { AuthService, SESSION_COOKIE } from "../auth/session.ts";
+import { AuthService, constantTimeTokenMatch, SESSION_COOKIE } from "../auth/session.ts";
 
 /** Header every state-changing request must carry. A cross-site form cannot set
  *  custom headers, and a cross-site fetch that does triggers a CORS preflight
@@ -20,11 +20,19 @@ export interface AuthDeps {
   repo: AuthRepo;
   /** "on" forces the cookie Secure flag; "auto" sets it only for HTTPS requests. */
   cookieSecure?: "auto" | "on";
+  /** Optional static operator token (SQLITEND_ADMIN_TOKEN). */
+  adminToken?: string | null;
 }
 
 export type AppEnv = { Bindings: { ip?: string }; Variables: { actor: string } };
 
-const LoginSchema = z.object({ password: z.string().min(1).max(1024), totp: z.string().max(16).optional() }).strict();
+const LoginSchema = z
+  .object({
+    password: z.string().min(1).max(1024).optional(),
+    token: z.string().min(1).max(1024).optional(),
+    totp: z.string().max(16).optional(),
+  })
+  .strict();
 
 const PUBLIC_PATHS = new Set(["/api/auth/login", "/api/auth/session"]);
 
@@ -34,14 +42,22 @@ const isMutating = (method: string) => method !== "GET" && method !== "HEAD" && 
 // SQLITEND_COOKIE_SECURE=on when TLS terminates in front of the control plane.
 const secureRequest = (c: Context) => new URL(c.req.url).protocol === "https:";
 
+function extractBearer(header: string | undefined): string | null {
+  if (!header) return null;
+  const m = /^Bearer\s+(\S+)$/i.exec(header.trim());
+  return m ? m[1]! : null;
+}
+
 /** "POST /api/databases/:id/tokens" → "token.create", etc. */
 const ACTIONS: Record<string, string> = {
   "POST /api/workspaces": "workspace.create",
   "DELETE /api/workspaces/:id": "workspace.delete",
+  "PATCH /api/workspaces/:id/protection": "workspace.protection",
   "POST /api/workspaces/:id/databases": "database.create",
   "POST /api/databases/:id/start": "database.start",
   "POST /api/databases/:id/stop": "database.stop",
   "DELETE /api/databases/:id": "database.delete",
+  "PATCH /api/databases/:id/protection": "database.protection",
   "POST /api/databases/:id/dns/sync": "dns.sync",
   "POST /api/backups/:id/restore": "database.restore",
   "POST /api/databases/:id/backup/verify": "backup.verify",
@@ -50,6 +66,12 @@ const ACTIONS: Record<string, string> = {
   "POST /api/databases/:id/tokens": "token.create",
   "DELETE /api/databases/:id/tokens/:jti": "token.revoke",
   "POST /api/databases/:id/tokens/:jti/reveal": "token.reveal",
+  "POST /api/databases/:id/query": "database.query",
+  "POST /api/databases/:id/tables/:table/rows": "table.insert",
+  "PATCH /api/databases/:id/tables/:table/rows": "table.update",
+  "DELETE /api/databases/:id/tables/:table/rows": "table.delete",
+  "POST /api/trash/:id/restore": "trash.restore",
+  "DELETE /api/trash/:id": "trash.purge",
   "POST /api/auth/logout": "auth.logout",
 };
 
@@ -112,20 +134,38 @@ export function installCsrfOnly(app: Hono<AppEnv>, repo: AuthDeps["repo"] | null
 
 export function installAuth(app: Hono<AppEnv>, auth: AuthDeps): void {
   const { service, repo } = auth;
+  const adminToken = auth.adminToken ?? null;
+
+  const isAuthSetup = () => service.setupDone || !!adminToken;
+
+  const isAuthenticated = (c: Context<AppEnv>): { ok: boolean; session: ReturnType<AuthService["validate"]> } => {
+    const bearer = extractBearer(c.req.header("authorization"));
+    if (bearer && adminToken && constantTimeTokenMatch(bearer, adminToken)) {
+      return { ok: true, session: null };
+    }
+    const cookieVal = getCookie(c, SESSION_COOKIE);
+    if (cookieVal && adminToken && constantTimeTokenMatch(cookieVal, adminToken)) {
+      return { ok: true, session: null };
+    }
+    const s = service.validate(cookieVal);
+    return { ok: !!s, session: s };
+  };
 
   // ---- CSRF + session gate ------------------------------------------------
   const gate: MiddlewareHandler<AppEnv> = async (c, next) => {
-    if (isMutating(c.req.method) && c.req.header(CSRF_HEADER) !== "1") {
+    const bearer = extractBearer(c.req.header("authorization"));
+    const validBearer = !!(bearer && adminToken && constantTimeTokenMatch(bearer, adminToken));
+    if (isMutating(c.req.method) && !validBearer && c.req.header(CSRF_HEADER) !== "1") {
       return c.json({ error: { code: "csrf", message: `missing ${CSRF_HEADER} header` } }, 403);
     }
     if (PUBLIC_PATHS.has(c.req.path)) {
       c.set("actor", "anonymous");
       return next();
     }
-    if (!service.setupDone) {
+    if (!isAuthSetup()) {
       return c.json({ error: { code: "setup_required", message: "no admin password set — run `sqlitend set-password` on the server" } }, 503);
     }
-    if (!service.validate(getCookie(c, SESSION_COOKIE))) {
+    if (!validBearer && !isAuthenticated(c).ok) {
       return c.json({ error: { code: "unauthenticated", message: "login required" } }, 401);
     }
     c.set("actor", "admin");
@@ -137,10 +177,11 @@ export function installAuth(app: Hono<AppEnv>, auth: AuthDeps): void {
 
   // ---- endpoints -------------------------------------------------------------
   app.get("/api/auth/session", (c) => {
-    const s = service.setupDone ? service.validate(getCookie(c, SESSION_COOKIE)) : null;
+    const setupDone = isAuthSetup();
+    const { ok, session: s } = setupDone ? isAuthenticated(c) : { ok: false, session: null };
     return c.json({
-      setupRequired: !service.setupDone,
-      authenticated: !!s,
+      setupRequired: !setupDone,
+      authenticated: ok,
       totpEnabled: service.totpEnabled,
       expiresAt: s ? Math.min(s.expires_at, s.last_seen_at + service.idleMs) : null,
     });
@@ -153,8 +194,22 @@ export function installAuth(app: Hono<AppEnv>, auth: AuthDeps): void {
     } catch {
       return c.json({ error: { code: "bad_request", message: "invalid login payload" } }, 400);
     }
+    const candidateSecret = body.token ?? body.password;
+    if (!candidateSecret) {
+      return c.json({ error: { code: "bad_request", message: "password or token required" } }, 400);
+    }
     const ip = ipOf(c);
-    const r = await service.login({ password: body.password, totp: body.totp, ip, userAgent: c.req.header("user-agent") });
+    const userAgent = c.req.header("user-agent");
+
+    // If SQLITEND_ADMIN_TOKEN is configured and either `token` was supplied or
+    // `password` matches the adminToken (and no admin password row is needed),
+    // verify against adminToken in constant time.
+    let r: Awaited<ReturnType<AuthService["login"]>>;
+    if (adminToken && (body.token !== undefined || (!service.setupDone && body.password !== undefined) || constantTimeTokenMatch(candidateSecret, adminToken))) {
+      r = service.loginWithAdminToken({ token: candidateSecret, expectedToken: adminToken, ip, userAgent });
+    } else {
+      r = await service.login({ password: candidateSecret, totp: body.totp, ip, userAgent });
+    }
     if (!r.ok) {
       if (r.reason !== "totp_required") {
         repo.audit({ actor: "anonymous", ip, action: "auth.login", target: null, outcome: "denied", detail: r.reason });

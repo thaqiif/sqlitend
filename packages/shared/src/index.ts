@@ -255,13 +255,174 @@ export const ReplicaInfoSchema = z.object({
   exists: z.boolean(),
 });
 export type ReplicaInfo = z.infer<typeof ReplicaInfoSchema>;
-
 export const ControlBackupStatusSchema = z.object({
   enabled: z.boolean(),
-  lastAt: z.number().int().nullable(),
+  at: z.string(),
+  keep: z.number().int(),
   lastOkAt: z.number().int().nullable(),
   lastKey: z.string().nullable(),
   lastError: z.string().nullable(),
   lastErrorAt: z.number().int().nullable(),
 });
 export type ControlBackupStatus = z.infer<typeof ControlBackupStatusSchema>;
+
+// ---------------------------------------------------------------------------
+// Built-in DB Client: Schema, SQL Query, and Table Rows (Phase 1)
+// ---------------------------------------------------------------------------
+
+export const SqlValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+export type SqlValue = z.infer<typeof SqlValueSchema>;
+
+export const ColumnInfoSchema = z.object({
+  cid: z.number().int(),
+  name: z.string(),
+  type: z.string(),
+  notnull: z.boolean(),
+  defaultValue: z.string().nullable(),
+  pk: z.number().int(),
+});
+export type ColumnInfo = z.infer<typeof ColumnInfoSchema>;
+
+export const ForeignKeyInfoSchema = z.object({
+  id: z.number().int(),
+  seq: z.number().int(),
+  table: z.string(),
+  from: z.string(),
+  to: z.string(),
+  onUpdate: z.string(),
+  onDelete: z.string(),
+});
+export type ForeignKeyInfo = z.infer<typeof ForeignKeyInfoSchema>;
+
+export const IndexInfoSchema = z.object({
+  name: z.string(),
+  unique: z.boolean(),
+  origin: z.string(),
+  partial: z.boolean(),
+  columns: z.array(z.string()),
+  sql: z.string().nullable(),
+});
+export type IndexInfo = z.infer<typeof IndexInfoSchema>;
+
+export const TableSchemaItemSchema = z.object({
+  name: z.string(),
+  type: z.enum(["table", "view"]),
+  sql: z.string().nullable(),
+  withoutRowid: z.boolean(),
+  rowCountEstimate: z.number().int().nullable(),
+  columns: z.array(ColumnInfoSchema),
+  primaryKey: z.array(z.string()),
+  indexes: z.array(IndexInfoSchema),
+  foreignKeys: z.array(ForeignKeyInfoSchema),
+});
+export type TableSchemaItem = z.infer<typeof TableSchemaItemSchema>;
+
+export const DatabaseSchemaResponseSchema = z.object({
+  tables: z.array(TableSchemaItemSchema),
+  refreshedAt: z.number().int(),
+});
+export type DatabaseSchemaResponse = z.infer<typeof DatabaseSchemaResponseSchema>;
+
+export const QueryRequestSchema = z
+  .object({
+    sql: z.string().min(1).max(200_000),
+    params: z.union([z.array(SqlValueSchema), z.record(z.string(), SqlValueSchema)]).optional(),
+    readOnly: z.boolean().optional().default(true),
+    limit: z.number().int().min(1).max(10_000).optional().default(1000),
+    timeoutMs: z.number().int().min(100).max(60_000).optional().default(10_000),
+  })
+  .strict();
+export type QueryRequest = z.infer<typeof QueryRequestSchema>;
+
+export const StatementResultSchema = z.object({
+  statement: z.string(),
+  columns: z.array(z.string()),
+  columnTypes: z.array(z.string().nullable()).optional(),
+  rows: z.array(z.array(SqlValueSchema)),
+  rowsAffected: z.number().int(),
+  lastInsertRowid: z.string().nullable(),
+  durationMs: z.number(),
+  truncated: z.boolean(),
+});
+export type StatementResult = z.infer<typeof StatementResultSchema>;
+
+export const QueryResponseSchema = z.object({
+  results: z.array(StatementResultSchema),
+  totalDurationMs: z.number(),
+});
+export type QueryResponse = z.infer<typeof QueryResponseSchema>;
+
+export const FilterOpSchema = z.enum([
+  "=",
+  "!=",
+  "<",
+  "<=",
+  ">",
+  ">=",
+  "like",
+  "isnull",
+  "notnull",
+  "in",
+]);
+export type FilterOp = z.infer<typeof FilterOpSchema>;
+
+export const TableFilterSchema = z
+  .object({
+    col: z.string().min(1).max(128),
+    op: FilterOpSchema,
+    value: z.union([SqlValueSchema, z.array(SqlValueSchema).max(500)]).optional(),
+  })
+  .strict();
+export type TableFilter = z.infer<typeof TableFilterSchema>;
+
+export const TableRowsResponseSchema = z.object({
+  table: z.string(),
+  columns: z.array(ColumnInfoSchema),
+  primaryKey: z.array(z.string()),
+  hasRowid: z.boolean(),
+  rows: z.array(z.record(z.string(), SqlValueSchema)),
+  total: z.number().int().nullable(),
+  hasMore: z.boolean(),
+  nextOffset: z.number().int().nullable(),
+  nextCursor: z.string().nullable().optional(),
+  durationMs: z.number(),
+});
+export type TableRowsResponse = z.infer<typeof TableRowsResponseSchema>;
+
+export const InsertRowsRequestSchema = z
+  .object({
+    rows: z.array(z.record(z.string(), SqlValueSchema)).min(1).max(500),
+  })
+  .strict();
+export type InsertRowsRequest = z.infer<typeof InsertRowsRequestSchema>;
+
+export const UpdateRowsRequestSchema = z
+  .object({
+    updates: z
+      .array(
+        z
+          .object({
+            pk: z.record(z.string(), SqlValueSchema),
+            values: z.record(z.string(), SqlValueSchema),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(500),
+  })
+  .strict();
+export type UpdateRowsRequest = z.infer<typeof UpdateRowsRequestSchema>;
+
+export const DeleteRowsRequestSchema = z
+  .object({
+    pks: z.array(z.record(z.string(), SqlValueSchema)).min(1).max(1000),
+  })
+  .strict();
+export type DeleteRowsRequest = z.infer<typeof DeleteRowsRequestSchema>;
+
+export const MutateRowsResponseSchema = z.object({
+  affected: z.number().int(),
+  lastInsertRowid: z.string().nullable().optional(),
+  durationMs: z.number(),
+});
+export type MutateRowsResponse = z.infer<typeof MutateRowsResponseSchema>;
