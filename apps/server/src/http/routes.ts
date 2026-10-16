@@ -10,10 +10,12 @@ import {
   DatabaseSchema,
   DeleteRowsRequestSchema,
   InsertRowsRequestSchema,
+  MetricsRangeSchema,
   QueryRequestSchema,
   TableFilterSchema,
   UpdateRowsRequestSchema,
   type CreateWorkspace,
+  type DatabaseMetricsSummary,
   type DatabaseStatus,
   type Database as DatabaseDto,
   type Connection,
@@ -21,7 +23,12 @@ import {
   type ErrorBody,
   type InsertRowsRequest,
   type Metrics,
+  type MetricsHistoryPoint,
+  type MetricsHistoryResponse,
+  type MetricsOverviewResponse,
+  type MetricsRange,
   type QueryRequest,
+  type StabilityBadge,
   type SystemInfo,
   type TableFilter,
   type UpdateRowsRequest,
@@ -33,6 +40,7 @@ import {
   createHttpHranaExecutor,
   deleteTableRows,
   inspectDatabaseSchema,
+  inspectDatabaseStorage,
   insertTableRows,
   runSqlQuery,
   updateTableRows,
@@ -41,6 +49,7 @@ import {
 import type { Config } from "../config.ts";
 import type { WorkspacesRepo } from "../db/repos/workspaces.ts";
 import type { DatabasesRepo, DatabaseRow as DbRow } from "../db/repos/databases.ts";
+import type { MetricsRepo, MetricsHistoryRow } from "../db/repos/metrics.ts";
 import { NameExistsError, SlugExistsError } from "../db/repos/databases.ts";
 import type { TokenRow, TokensRepo } from "../db/repos/tokens.ts";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -199,11 +208,33 @@ export interface RoutesDeps {
   auth?: AuthDeps | null;
   /** Optional custom Hrana executor (for tests or metrics hooks). */
   hrana?: HranaExecutor;
+  /** Optional persisted metrics repo (Phase 3). */
+  metricsRepo?: MetricsRepo | null;
 }
 
 export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const hrana = d.hrana ?? createHttpHranaExecutor(d.config.dataRoot);
+  const baseHrana =
+    d.hrana ??
+    createHttpHranaExecutor(d.config.dataRoot, {
+      onQuery: (ev) => d.sampler.recordQuery(ev.dbId, ev.durationMs, ev.ok),
+    });
+  // Wrap any custom hrana executor so d.sampler.recordQuery is also invoked during tests
+  const hrana: HranaExecutor = d.hrana
+    ? {
+        async pipeline(db, stmts, opts) {
+          const t0 = performance.now();
+          try {
+            const res = await d.hrana!.pipeline(db, stmts, opts);
+            d.sampler.recordQuery(db.id, res.totalDurationMs, true);
+            return res;
+          } catch (err) {
+            d.sampler.recordQuery(db.id, Number((performance.now() - t0).toFixed(2)), false);
+            throw err;
+          }
+        },
+      }
+    : baseHrana;
   const hostTemplate = d.config.gatewayHostTemplate ? parseHostTemplate(d.config.gatewayHostTemplate) : null;
   /** Database DTO plus its public gateway URL (null without a gateway). */
   const toDto = (r: DbRow): DatabaseDto => ({
@@ -712,6 +743,191 @@ export function createRoutes(d: RoutesDeps): Hono<AppEnv> {
     return c.json(sampleDto(sample));
   });
 
+  app.get("/api/databases/:id/metrics/history", (c) => {
+    const row = requireDb(c.req.param("id"));
+    const rawRange = c.req.query("range") ?? "1h";
+    let range: MetricsRange;
+    try {
+      range = MetricsRangeSchema.parse(rawRange);
+    } catch {
+      throw new ApiError(400, "bad_request", "range must be 1h, 24h, or 7d");
+    }
+
+    const now = Date.now();
+    const windowMs = range === "1h" ? 3_600_000 : range === "24h" ? 86_400_000 : 7 * 86_400_000;
+    const sinceMs = now - windowMs;
+
+    const latest = d.sampler.latestFor(row.id) ?? d.sampler.sampleOne({
+      dbId: row.id,
+      pid: row.pid,
+      startTimeMs: row.start_time,
+      dataDir: row.data_dir,
+      status: row.status,
+    });
+    d.sampler.set(row.id, latest);
+
+    const rows: MetricsHistoryRow[] = d.metricsRepo
+      ? d.metricsRepo.listSince(row.id, sinceMs, 360)
+      : [];
+
+    const points: MetricsHistoryPoint[] =
+      rows.length > 0
+        ? rows.map((r) => ({
+            t: r.sampled_at,
+            status: coerceStatus(r.status),
+            cpuPct: r.cpu_pct,
+            memoryBytes: r.memory_bytes,
+            diskBytes: r.disk_bytes,
+            walBytes: r.wal_bytes,
+            queryCount: r.query_count,
+            queryErrors: r.query_errors,
+            p50Ms: r.p50_ms,
+            p95Ms: r.p95_ms,
+            p99Ms: r.p99_ms,
+          }))
+        : [
+            {
+              t: latest.sampledAt,
+              status: coerceStatus(latest.status),
+              cpuPct: latest.cpuPct,
+              memoryBytes: latest.memoryBytes,
+              diskBytes: latest.diskBytes,
+              walBytes: latest.walBytes ?? 0,
+              queryCount: 0,
+              queryErrors: 0,
+              p50Ms: null,
+              p95Ms: null,
+              p99Ms: null,
+            },
+          ];
+
+    const diskGrowthBytesPerHour = computeDiskGrowthPerHour(points);
+    const stability = buildStabilityBadge(row, d.metricsRepo ?? null, now);
+    const latency = d.sampler.getQueryStats(row.id);
+
+    const res: MetricsHistoryResponse = {
+      range,
+      points,
+      diskGrowthBytesPerHour,
+      stability,
+      latency,
+    };
+    return c.json(res);
+  });
+
+  app.get("/api/databases/:id/storage", async (c) => {
+    const row = requireRunningDb(c.req.param("id"));
+    const stats = await inspectDatabaseStorage(hrana, {
+      id: row.id,
+      slug: row.slug,
+      port: row.port!,
+      dataDir: row.data_dir,
+    });
+    return c.json(stats);
+  });
+
+  app.get("/api/metrics/overview", (c) => {
+    const now = Date.now();
+    const since1h = now - 3_600_000;
+    const allDbs = d.databases.list();
+
+    let runningDbs = 0;
+    let stoppedDbs = 0;
+    let crashedOrFailedDbs = 0;
+    let totalDiskBytes = 0;
+    let totalWalBytes = 0;
+    let totalMemoryBytes = 0;
+    let totalQueries = 0;
+    let totalErrors = 0;
+
+    const summaries: Record<string, DatabaseMetricsSummary> = {};
+
+    for (const row of allDbs) {
+      if (row.status === "running") runningDbs++;
+      else if (row.status === "stopped") stoppedDbs++;
+      else if (row.status === "crashed" || row.status === "failed") crashedOrFailedDbs++;
+
+      const latest = d.sampler.latestFor(row.id) ?? d.sampler.sampleOne({
+        dbId: row.id,
+        pid: row.pid,
+        startTimeMs: row.start_time,
+        dataDir: row.data_dir,
+        status: row.status,
+      });
+      d.sampler.set(row.id, latest);
+
+      const walBytes = latest.walBytes ?? 0;
+      totalDiskBytes += latest.diskBytes;
+      totalWalBytes += walBytes;
+      totalMemoryBytes += latest.memoryBytes;
+
+      const latency = d.sampler.getQueryStats(row.id);
+      totalQueries += latency.totalQueries;
+      totalErrors += latency.totalErrors;
+
+      const histRows = d.metricsRepo ? d.metricsRepo.listSince(row.id, since1h, 40) : [];
+      const points: MetricsHistoryPoint[] =
+        histRows.length > 0
+          ? histRows.map((r) => ({
+              t: r.sampled_at,
+              status: coerceStatus(r.status),
+              cpuPct: r.cpu_pct,
+              memoryBytes: r.memory_bytes,
+              diskBytes: r.disk_bytes,
+              walBytes: r.wal_bytes,
+              queryCount: r.query_count,
+              queryErrors: r.query_errors,
+              p50Ms: r.p50_ms,
+              p95Ms: r.p95_ms,
+              p99Ms: r.p99_ms,
+            }))
+          : [
+              {
+                t: latest.sampledAt,
+                status: coerceStatus(latest.status),
+                cpuPct: latest.cpuPct,
+                memoryBytes: latest.memoryBytes,
+                diskBytes: latest.diskBytes,
+                walBytes,
+                queryCount: 0,
+                queryErrors: 0,
+                p50Ms: latency.p50Ms,
+                p95Ms: latency.p95Ms,
+                p99Ms: latency.p99Ms,
+              },
+            ];
+
+      summaries[row.id] = {
+        databaseId: row.id,
+        stability: buildStabilityBadge(row, d.metricsRepo ?? null, now),
+        walBytes,
+        diskGrowthBytesPerHour: computeDiskGrowthPerHour(points),
+        latency,
+        sparkline: {
+          t: points.map((p) => p.t),
+          cpuPct: points.map((p) => p.cpuPct),
+          memoryBytes: points.map((p) => p.memoryBytes),
+          p95Ms: points.map((p) => p.p95Ms),
+        },
+      };
+    }
+
+    const overview: MetricsOverviewResponse = {
+      totals: {
+        runningDbs,
+        stoppedDbs,
+        crashedOrFailedDbs,
+        totalDiskBytes,
+        totalWalBytes,
+        totalMemoryBytes,
+        totalQueries,
+        totalErrors,
+      },
+      databases: summaries,
+    };
+    return c.json(overview);
+  });
+
   app.onError((err, c) => {
     if (err instanceof ApiError) return c.json(err.body(), err.status as ContentfulStatusCode);
     if (err instanceof PortExhaustedError) {
@@ -819,5 +1035,86 @@ function sampleDto(s: { cpuPct: number | null; memoryBytes: number; diskBytes: n
     uptimeSec: s.uptimeSec,
     status: coerceStatus(s.status),
     sampledAt: s.sampledAt,
+  };
+}
+
+export function computeDiskGrowthPerHour(points: { t: number; diskBytes: number }[]): number | null {
+  if (points.length < 2) return null;
+  const first = points[0]!;
+  const last = points[points.length - 1]!;
+  const dtHours = (last.t - first.t) / 3_600_000;
+  if (dtHours <= 0.001) return null;
+  return Math.round((last.diskBytes - first.diskBytes) / dtHours);
+}
+
+export function buildStabilityBadge(
+  row: DbRow,
+  metricsRepo: MetricsRepo | null,
+  now = Date.now(),
+): StabilityBadge {
+  const since24h = now - 86_400_000;
+  const crashes24h = metricsRepo ? metricsRepo.countCrashesSince(row.id, since24h) : 0;
+  const availabilityPct24h = metricsRepo
+    ? metricsRepo.availabilitySince(row.id, since24h, row.status)
+    : row.status === "running" || row.status === "stopped"
+      ? 100
+      : 0;
+  const totalCrashes = row.crash_count ?? 0;
+  const restartCount = row.restart_count ?? 0;
+  const lastCrashAt = row.last_crash_at ?? null;
+  const lastCrashReason = row.last_crash_reason ?? null;
+
+  if (row.status === "crashed" || row.status === "failed" || crashes24h >= 2 || availabilityPct24h < 95) {
+    return {
+      level: "degraded",
+      label: "Degraded",
+      rule: "Process is crashed/failed, >= 2 crashes in 24h, or < 95% 24h availability",
+      availabilityPct24h,
+      crashes24h,
+      totalCrashes,
+      restartCount,
+      lastCrashAt,
+      lastCrashReason,
+    };
+  }
+
+  if (row.status === "stopped") {
+    return {
+      level: "stopped",
+      label: "Stopped",
+      rule: "Database is intentionally stopped",
+      availabilityPct24h,
+      crashes24h,
+      totalCrashes,
+      restartCount,
+      lastCrashAt,
+      lastCrashReason,
+    };
+  }
+
+  if (crashes24h === 1 || availabilityPct24h < 99.9) {
+    return {
+      level: "warning",
+      label: "Warning",
+      rule: "1 crash in last 24h or 24h availability between 95% and 99.9%",
+      availabilityPct24h,
+      crashes24h,
+      totalCrashes,
+      restartCount,
+      lastCrashAt,
+      lastCrashReason,
+    };
+  }
+
+  return {
+    level: "healthy",
+    label: "Healthy",
+    rule: "0 crashes in 24h and >= 99.9% availability",
+    availabilityPct24h,
+    crashes24h,
+    totalCrashes,
+    restartCount,
+    lastCrashAt,
+    lastCrashReason,
   };
 }

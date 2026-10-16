@@ -18,6 +18,10 @@ import type {
   Database,
   ErrorBody,
   Metrics,
+  MetricsHistoryResponse,
+  MetricsOverviewResponse,
+  MetricsRange,
+  StorageStatsResponse,
   SystemInfo,
   TableFilter,
   TableRowsResponse,
@@ -161,6 +165,17 @@ export const api = {
   // -------------------------------------------------------------------------
   getMetrics: (id: string) =>
     request<Metrics>(`/databases/${encodeURIComponent(id)}/metrics`),
+
+  getMetricsHistory: (id: string, range: MetricsRange = "1h") =>
+    request<MetricsHistoryResponse>(
+      `/databases/${encodeURIComponent(id)}/metrics/history?range=${encodeURIComponent(range)}`,
+    ),
+
+  getStorageStats: (id: string) =>
+    request<StorageStatsResponse>(`/databases/${encodeURIComponent(id)}/storage`),
+
+  getMetricsOverview: () =>
+    request<MetricsOverviewResponse>("/metrics/overview"),
 
   getSystemInfo: () => request<SystemInfo>("/system"),
 

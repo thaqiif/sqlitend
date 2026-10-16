@@ -23,9 +23,11 @@ import type {
   TableRowsResponse,
   TableSchemaItem,
   UpdateRowsRequest,
+  StorageStatsResponse,
 } from "@sqlitend/shared";
 import { mintToken } from "../auth/tokens.ts";
 import { ApiError } from "../http/routes.ts";
+import { dirBytes, walDirBytes } from "../metrics/sampler.ts";
 
 export interface HranaPipelineReq {
   type: "execute" | "close";
@@ -987,4 +989,50 @@ export async function deleteTableRows(
   const affected = execResults.reduce((acc, r) => acc + r.rowsAffected, 0);
 
   return { affected, durationMs: totalDurationMs };
+}
+
+export async function inspectDatabaseStorage(
+  executor: HranaExecutor,
+  db: { id: string; slug: string; port: number; dataDir: string },
+): Promise<StorageStatsResponse> {
+  const { results: pragmaRes } = await executor.pipeline(db, [
+    { sql: "PRAGMA page_count" },
+    { sql: "PRAGMA page_size" },
+    { sql: "PRAGMA freelist_count" },
+    {
+      sql: `SELECT name FROM sqlite_schema
+            WHERE type = 'table'
+              AND name NOT LIKE 'sqlite_%'
+              AND name NOT LIKE '_litestream_%'
+            ORDER BY name COLLATE NOCASE`,
+    },
+  ]);
+
+  const pageCount = Number(pragmaRes[0]!.rows[0]?.[0] ?? 0);
+  const pageSize = Number(pragmaRes[1]!.rows[0]?.[0] ?? 4096);
+  const freelistCount = Number(pragmaRes[2]!.rows[0]?.[0] ?? 0);
+  const tableNames = pragmaRes[3]!.rows.map((r) => String(r[0]));
+
+  const tableRowCounts: { name: string; count: number }[] = [];
+  if (tableNames.length > 0) {
+    const countStmts = tableNames.map((name) => ({
+      sql: `SELECT COUNT(*) FROM ${quoteIdent(name)}`,
+    }));
+    const { results: countRes } = await executor.pipeline(db, countStmts);
+    for (let i = 0; i < tableNames.length; i++) {
+      tableRowCounts.push({
+        name: tableNames[i]!,
+        count: Number(countRes[i]!.rows[0]?.[0] ?? 0),
+      });
+    }
+  }
+
+  return {
+    pageCount,
+    pageSize,
+    freelistCount,
+    walBytes: walDirBytes(db.dataDir),
+    diskBytes: dirBytes(db.dataDir),
+    tableRowCounts,
+  };
 }

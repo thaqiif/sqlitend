@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { BackupStatus, Database, Metrics, Workspace } from "@sqlitend/shared";
+import type { BackupStatus, Database, Metrics, MetricsOverviewResponse, Workspace } from "@sqlitend/shared";
 import { api } from "../api/client";
 import { shortSqldVersion } from "../format";
 import { CreateDatabaseDialog } from "../components/CreateDatabaseDialog";
@@ -8,6 +8,37 @@ import { CreateWorkspaceDialog } from "../components/CreateWorkspaceDialog";
 import { Modal } from "../components/Modal";
 
 const POLL_MS = 5000;
+
+function fmtBytesCompact(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
+}
+
+function MiniSparkline({ values, color = "#4f8cff" }: { values: (number | null)[]; color?: string }) {
+  const nums = values.map((v) => v ?? 0);
+  if (nums.length < 2) return null;
+  const max = Math.max(...nums, 1);
+  const min = Math.min(...nums, 0);
+  const span = Math.max(max - min, 1);
+  const w = 110;
+  const h = 24;
+  const pts = nums
+    .map((v, i) => {
+      const x = (i / (nums.length - 1)) * w;
+      const y = h - ((v - min) / span) * (h - 4) - 2;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg width={w} height={h} className="sparkline-svg" aria-hidden="true">
+      <polyline fill="none" stroke={color} strokeWidth="1.75" points={pts} />
+    </svg>
+  );
+}
 
 interface Props {
   workspaces: Workspace[];
@@ -52,6 +83,7 @@ export function DatabasesPage({
 }: Props) {
   const [databases, setDatabases] = useState<Database[]>([]);
   const [metrics, setMetrics] = useState<Record<string, Metrics>>({});
+  const [overview, setOverview] = useState<MetricsOverviewResponse | null>(null);
   const [backups, setBackups] = useState<Record<string, BackupStatus>>({});
   // One global call for every card's backup + restore-verify state.
   const loadBackups = useCallback(
@@ -101,22 +133,26 @@ export function DatabasesPage({
         if (workspaceIdRef.current !== wsId) return; // stale — a newer load owns the UI
         setDatabases(dbs);
         setListError(null);
-        // Fetch live per-database metrics for the inline CPU/memory chips.
-        const entries = await Promise.all(
-          dbs.map(async (db) => {
-            try {
-              return [db.id, await api.getMetrics(db.id)] as const;
-            } catch {
-              return null;
-            }
-          }),
-        );
+        // Fetch live per-database metrics and system overview in parallel.
+        const [entries, ov] = await Promise.all([
+          Promise.all(
+            dbs.map(async (db) => {
+              try {
+                return [db.id, await api.getMetrics(db.id)] as const;
+              } catch {
+                return null;
+              }
+            }),
+          ),
+          api.getMetricsOverview().catch(() => null),
+        ]);
         if (workspaceIdRef.current !== wsId) return;
         const map: Record<string, Metrics> = {};
         for (const e of entries) {
           if (e) map[e[0]] = e[1];
         }
         setMetrics(map);
+        if (ov) setOverview(ov);
       } catch (err) {
         if (workspaceIdRef.current !== wsId) return;
         setListError(err instanceof Error ? err.message : "Failed to load databases");
@@ -240,6 +276,34 @@ export function DatabasesPage({
       </aside>
 
       <main className="content">
+        {overview && (
+          <section className="system-overview-strip" aria-label="System resource overview">
+            <div className="overview-chip">
+              <span className="mini-metric-label">Instances</span>
+              <strong>
+                {overview.totals.runningDbs} running · {overview.totals.stoppedDbs} stopped
+                {overview.totals.crashedOrFailedDbs > 0 ? ` · ${overview.totals.crashedOrFailedDbs} faulted` : ""}
+              </strong>
+            </div>
+            <div className="overview-chip">
+              <span className="mini-metric-label">Total Disk / WAL</span>
+              <strong>
+                {fmtBytesCompact(overview.totals.totalDiskBytes)} ({fmtBytesCompact(overview.totals.totalWalBytes)} WAL)
+              </strong>
+            </div>
+            <div className="overview-chip">
+              <span className="mini-metric-label">Total RSS</span>
+              <strong>{fmtBytesCompact(overview.totals.totalMemoryBytes)}</strong>
+            </div>
+            <div className="overview-chip">
+              <span className="mini-metric-label">Queries</span>
+              <strong>
+                {overview.totals.totalQueries.toLocaleString()} ({overview.totals.totalErrors} err)
+              </strong>
+            </div>
+          </section>
+        )}
+
         <div className="content-header">
           <h2>
             {workspaces.find((w) => w.id === selectedWorkspaceId)?.name ?? "Databases"}
@@ -281,6 +345,7 @@ export function DatabasesPage({
           <section className="db-grid" aria-label="Databases">
             {databases.map((db) => {
               const m = metrics[db.id];
+              const summary = overview?.databases[db.id];
               return (
                 <article key={db.id} className="db-card">
                   <header className="db-card-header">
@@ -294,7 +359,17 @@ export function DatabasesPage({
                         {db.slug !== db.name && <span className="db-slug">{db.slug}</span>}
                       </span>
                     </button>
-                    <span className={`status-badge status-${db.status}`}>{db.status}</span>
+                    <div className="card-badges-right">
+                      {summary && (
+                        <span
+                          className={`stability-badge stability-pill-${summary.stability.level}`}
+                          title={`${summary.stability.label}: ${summary.stability.rule} (${summary.stability.availabilityPct24h}% 24h avail)`}
+                        >
+                          {summary.stability.label}
+                        </span>
+                      )}
+                      <span className={`status-badge status-${db.status}`}>{db.status}</span>
+                    </div>
                   </header>
                   <div className="db-meta">
                     <span className="db-endpoint mono" title={db.publicUrl ?? dbHost(db) ?? undefined}>
@@ -321,7 +396,20 @@ export function DatabasesPage({
                           : `${Math.max(0, Math.round(m.memoryBytes / 1048576))} MB`
                       }
                     />
+                    <MiniMetric
+                      label="Disk"
+                      value={m == null ? "—" : fmtBytesCompact(m.diskBytes)}
+                    />
+                    {summary?.latency.p95Ms != null && (
+                      <MiniMetric label="p95" value={`${summary.latency.p95Ms}ms`} />
+                    )}
                   </div>
+                  {summary && summary.sparkline.memoryBytes.length > 1 && (
+                    <div className="card-sparkline-row">
+                      <span className="muted small">Mem trend</span>
+                      <MiniSparkline values={summary.sparkline.memoryBytes} color="#3fb950" />
+                    </div>
+                  )}
                   <button
                     type="button"
                     className="icon-btn danger db-delete"

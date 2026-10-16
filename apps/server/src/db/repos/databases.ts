@@ -25,6 +25,10 @@ export interface DatabaseRow {
   dns_status: string | null;
   dns_error: string | null;
   created_at: number;
+  crash_count?: number;
+  last_crash_at?: number | null;
+  last_crash_reason?: string | null;
+  restart_count?: number;
 }
 
 export interface CreateDatabaseInput {
@@ -57,7 +61,8 @@ export interface RuntimeUpdate {
 const SELECT_FIELDS =
   "id, workspace_id, slug, name, status, pid, start_time, port, grpc_port, " +
   "data_dir, auth_key, auto_start, sqld_version, failed_reason, " +
-  "dns_hostname, dns_record_id, dns_status, dns_error, created_at";
+  "dns_hostname, dns_record_id, dns_status, dns_error, created_at, " +
+  "crash_count, last_crash_at, last_crash_reason, restart_count";
 
 export class DatabasesRepo {
   constructor(private readonly db: Database) {}
@@ -105,6 +110,10 @@ export class DatabasesRepo {
       dns_status: null,
       dns_error: null,
       created_at: input.created_at,
+      crash_count: 0,
+      last_crash_at: null,
+      last_crash_reason: null,
+      restart_count: 0,
     };
     try {
       this.db

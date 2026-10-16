@@ -155,3 +155,75 @@ describe("disk containment (data root)", () => {
     }
   });
 });
+
+describe("Phase 3: Metrics history, query latency, and stability badge", () => {
+  test("MetricsRepo persists samples, downsamples, and computes 24h availability & crash counts", async () => {
+    const { openMetadata } = await import("../../src/db/metadata.ts");
+    const { buildStabilityBadge } = await import("../../src/http/routes.ts");
+    const root = mkdtempSync(path.join(tmpdir(), "sqlitend-phase3-metrics-"));
+    const meta = openMetadata(path.join(root, "metadata.sqlite"));
+    try {
+      const ws = meta.workspaces.create({
+        id: "00000000-0000-4000-8000-000000000010",
+        slug: "ws1",
+        name: "WS 1",
+        createdAt: Date.now(),
+      });
+      const dbRow = meta.databases.create({
+        id: "00000000-0000-4000-8000-000000000020",
+        workspace_id: ws.id,
+        slug: "db1",
+        name: "DB 1",
+        status: "running",
+        data_dir: path.join(root, "workspaces", "ws1", "dbs", "db1"),
+        created_at: Date.now(),
+      });
+
+      const sampler = new Sampler(5000, root, meta.metrics);
+      sampler.recordQuery(dbRow.id, 2.5, true);
+      sampler.recordQuery(dbRow.id, 8.0, true);
+      sampler.recordQuery(dbRow.id, 24.0, false);
+
+      const qStats = sampler.getQueryStats(dbRow.id);
+      expect(qStats.totalQueries).toBe(3);
+      expect(qStats.totalErrors).toBe(1);
+      expect(qStats.p50Ms).toBe(8);
+      expect(qStats.p95Ms).toBe(24);
+
+      sampler.sampleOne({
+        dbId: dbRow.id,
+        pid: process.pid,
+        startTimeMs: Date.now() - 10_000,
+        dataDir: dbRow.data_dir,
+        status: "running",
+      });
+
+      const hist = meta.metrics.listSince(dbRow.id, Date.now() - 60_000);
+      expect(hist.length).toBe(1);
+      expect(hist[0]!.query_count).toBe(3);
+      expect(hist[0]!.query_errors).toBe(1);
+
+      // Healthy when 0 crashes and 100% running
+      const badge1 = buildStabilityBadge(meta.databases.getById(dbRow.id)!, meta.metrics);
+      expect(badge1.level).toBe("healthy");
+      expect(badge1.crashes24h).toBe(0);
+
+      // Record 1 crash -> warning
+      meta.metrics.recordCrash(dbRow.id, Date.now(), "signal=SIGKILL");
+      const badge2 = buildStabilityBadge(meta.databases.getById(dbRow.id)!, meta.metrics);
+      expect(badge2.level).toBe("warning");
+      expect(badge2.crashes24h).toBe(1);
+      expect(badge2.totalCrashes).toBe(1);
+      expect(badge2.lastCrashReason).toBe("signal=SIGKILL");
+
+      // Record 2nd crash -> degraded
+      meta.metrics.recordCrash(dbRow.id, Date.now() + 1, "signal=SIGSEGV");
+      const badge3 = buildStabilityBadge(meta.databases.getById(dbRow.id)!, meta.metrics);
+      expect(badge3.level).toBe("degraded");
+      expect(badge3.crashes24h).toBe(2);
+    } finally {
+      meta.db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

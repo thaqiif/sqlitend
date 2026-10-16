@@ -426,3 +426,104 @@ export const MutateRowsResponseSchema = z.object({
   durationMs: z.number(),
 });
 export type MutateRowsResponse = z.infer<typeof MutateRowsResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Phase 3: Statistics, History & Stability Metrics
+// ---------------------------------------------------------------------------
+
+export const StabilityLevelSchema = z.enum(["healthy", "warning", "degraded", "stopped"]);
+export type StabilityLevel = z.infer<typeof StabilityLevelSchema>;
+
+export const StabilityBadgeSchema = z.object({
+  level: StabilityLevelSchema,
+  label: z.string(),
+  rule: z.string(),
+  availabilityPct24h: z.number(),
+  crashes24h: z.number().int(),
+  totalCrashes: z.number().int(),
+  restartCount: z.number().int(),
+  lastCrashAt: z.number().int().nullable(),
+  lastCrashReason: z.string().nullable(),
+});
+export type StabilityBadge = z.infer<typeof StabilityBadgeSchema>;
+
+export const MetricsHistoryPointSchema = z.object({
+  t: z.number().int(),
+  status: DatabaseStatusSchema,
+  cpuPct: z.number().nullable(),
+  memoryBytes: z.number().int(),
+  diskBytes: z.number().int(),
+  walBytes: z.number().int(),
+  queryCount: z.number().int(),
+  queryErrors: z.number().int(),
+  p50Ms: z.number().nullable(),
+  p95Ms: z.number().nullable(),
+  p99Ms: z.number().nullable(),
+});
+export type MetricsHistoryPoint = z.infer<typeof MetricsHistoryPointSchema>;
+
+export const MetricsRangeSchema = z.enum(["1h", "24h", "7d"]);
+export type MetricsRange = z.infer<typeof MetricsRangeSchema>;
+
+export const MetricsHistoryResponseSchema = z.object({
+  range: MetricsRangeSchema,
+  points: z.array(MetricsHistoryPointSchema),
+  diskGrowthBytesPerHour: z.number().nullable(),
+  stability: StabilityBadgeSchema,
+  latency: z.object({
+    p50Ms: z.number().nullable(),
+    p95Ms: z.number().nullable(),
+    p99Ms: z.number().nullable(),
+    totalQueries: z.number().int(),
+    totalErrors: z.number().int(),
+    errorRatePct: z.number(),
+  }),
+});
+export type MetricsHistoryResponse = z.infer<typeof MetricsHistoryResponseSchema>;
+
+export const StorageStatsResponseSchema = z.object({
+  pageCount: z.number().int(),
+  pageSize: z.number().int(),
+  freelistCount: z.number().int(),
+  walBytes: z.number().int(),
+  diskBytes: z.number().int(),
+  tableRowCounts: z.array(z.object({ name: z.string(), count: z.number().int() })),
+});
+export type StorageStatsResponse = z.infer<typeof StorageStatsResponseSchema>;
+
+export const DatabaseMetricsSummarySchema = z.object({
+  databaseId: z.string(),
+  stability: StabilityBadgeSchema,
+  walBytes: z.number().int(),
+  diskGrowthBytesPerHour: z.number().nullable(),
+  latency: z.object({
+    p50Ms: z.number().nullable(),
+    p95Ms: z.number().nullable(),
+    p99Ms: z.number().nullable(),
+    totalQueries: z.number().int(),
+    totalErrors: z.number().int(),
+    errorRatePct: z.number(),
+  }),
+  sparkline: z.object({
+    t: z.array(z.number().int()),
+    cpuPct: z.array(z.number().nullable()),
+    memoryBytes: z.array(z.number().int()),
+    p95Ms: z.array(z.number().nullable()),
+  }),
+});
+export type DatabaseMetricsSummary = z.infer<typeof DatabaseMetricsSummarySchema>;
+
+export const MetricsOverviewResponseSchema = z.object({
+  totals: z.object({
+    runningDbs: z.number().int(),
+    stoppedDbs: z.number().int(),
+    crashedOrFailedDbs: z.number().int(),
+    totalDiskBytes: z.number().int(),
+    totalWalBytes: z.number().int(),
+    totalMemoryBytes: z.number().int(),
+    totalQueries: z.number().int(),
+    totalErrors: z.number().int(),
+  }),
+  databases: z.record(z.string(), DatabaseMetricsSummarySchema),
+});
+export type MetricsOverviewResponse = z.infer<typeof MetricsOverviewResponseSchema>;

@@ -70,7 +70,7 @@ const metadata: Metadata = await (async () => {
     throw err;
   }
 })();
-const { workspaces, databases, tokens, auth: authRepo } = metadata;
+const { workspaces, databases, tokens, auth: authRepo, metrics: metricsRepo } = metadata;
 
 try {
   assertStartupAuth(config, authRepo.getAdmin() !== null);
@@ -94,9 +94,9 @@ const sqldOk = !!sqldVer;
 // ---------------------------------------------------------------------------
 // Supervisor + Sampler
 // ---------------------------------------------------------------------------
-const supervisor = new Supervisor({ config, databases });
+const supervisor = new Supervisor({ config, databases, metrics: metricsRepo });
 
-const sampler = new Sampler(config.sampleIntervalMs, config.dataRoot);
+const sampler = new Sampler(config.sampleIntervalMs, config.dataRoot, metricsRepo);
 const samplerProvider = (): SamplerRow[] =>
   databases.list().map((r) => ({
     dbId: r.id,
@@ -119,6 +119,7 @@ if (swept > 0) console.log(`[boot] swept ${swept} orphaned sqld process(es)`);
 warnUnregisteredDataDirs();
 console.log(`[boot] sqld ${sqldVer ?? `UNAVAILABLE at ${config.sqldPath} — run scripts/fetch-sqld.sh`} | dataRoot=${config.dataRoot}`);
 
+sampler.tick(samplerProvider());
 sampler.start(samplerProvider);
 
 // ---------------------------------------------------------------------------
@@ -289,6 +290,7 @@ const routes = createRoutes({
   tokens,
   supervisor,
   sampler,
+  metricsRepo,
   sqldOk,
   sqldVersion: sqldVer,
   version: VERSION,

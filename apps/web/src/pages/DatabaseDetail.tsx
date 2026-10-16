@@ -11,6 +11,7 @@ import { DataGridTab } from "../components/DataGridTab";
 import { StructureTab } from "../components/StructureTab";
 
 const SqlConsoleTab = lazy(() => import("../components/SqlConsoleTab"));
+const MetricsTab = lazy(() => import("../components/MetricsTab"));
 
 export type DbSubTab = "data" | "sql" | "structure" | "metrics" | "settings";
 
@@ -444,17 +445,21 @@ export function DatabaseDetail({
       )}
 
       {tab === "metrics" && (
-        <section className="panel">
-          <h3 className="panel-title">Live metrics</h3>
-          <MetricTiles metrics={metrics} />
-          <p className={`muted sampled${metricsPolling ? " sampling" : ""}`}>
-            {metricsDegraded
-              ? `Metrics unavailable — last sampled ${metrics ? fmtTime(metrics.sampledAt) : "never"}`
-              : metrics
-                ? `Sampled ${fmtTime(metrics.sampledAt)}`
-                : "Awaiting sample…"}
-          </p>
-        </section>
+        <Suspense
+          fallback={
+            <section className="panel">
+              <div className="skeleton-line" style={{ width: "100%", height: "220px" }} />
+            </section>
+          }
+        >
+          <MetricsTab
+            dbId={databaseId}
+            dbStatus={db.status}
+            liveMetrics={metrics}
+            metricsPolling={metricsPolling}
+            metricsDegraded={metricsDegraded}
+          />
+        </Suspense>
       )}
 
       {tab === "settings" && (

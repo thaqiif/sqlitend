@@ -35,6 +35,7 @@ import { readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { Config } from "../config.ts";
 import type { DatabasesRepo } from "../db/repos/databases.ts";
+import type { MetricsRepo } from "../db/repos/metrics.ts";
 import { launchSqld, procStartEpochMs, livePids, type LaunchResult } from "./launcher.ts";
 import { createPortAllocator, portBound } from "./ports.ts";
 import { ensureDbKey } from "../auth/tokens.ts";
@@ -52,6 +53,7 @@ export type DatabaseStatusValue =
 export interface SupervisorDeps {
   config: Config;
   databases: DatabasesRepo;
+  metrics?: MetricsRepo;
 }
 
 const GRACE_MS = 5000;
@@ -177,7 +179,7 @@ export class Supervisor {
    * still claims a live status. Intentional kills (stop/delete/shutdown) and
    * failed launches must not be downgraded or overwritten by the exit event.
    */
-  private markCrashedIfLive(dbId: string) {
+  private markCrashedIfLive(dbId: string, reason = "sqld exited unexpectedly") {
     const row = this.deps.databases.getById(dbId);
     if (!row) return;
     if (row.status !== "running" && row.status !== "starting") return;
@@ -187,6 +189,7 @@ export class Supervisor {
     // still works because start_time goes NULL (mismatch → not adopted).
     this.deps.databases.clearRuntime(dbId);
     this.persistRuntime(dbId, { status: "crashed" });
+    this.deps.metrics?.recordCrash(dbId, Date.now(), reason);
     console.error(`[crash] db ${row.slug} (${dbId}) sqld exited unexpectedly`);
   }
 
@@ -201,7 +204,7 @@ export class Supervisor {
       if (code !== 0 || signal != null) {
         console.error(`[crash] dbId=${dbId} sqld exited code=${code} signal=${signal ?? "none"}`);
       }
-      this.markCrashedIfLive(dbId);
+      this.markCrashedIfLive(dbId, `exit code=${code ?? "null"} signal=${signal ?? "none"}`);
     });
   }
 
@@ -276,8 +279,12 @@ export class Supervisor {
       return { ok: false, error: res.error, stderrTail: res.stderrTail };
     }
 
+    const wasPreviouslyStarted = row.status === "crashed" || row.status === "failed" || row.status === "stopped";
     this.deps.databases.setFailedReason(dbId, null);
     this.persistRuntime(dbId, { status: "running", sqld_version: res.sqldVersionAtLaunch });
+    if (wasPreviouslyStarted && (row.crash_count ?? 0) > 0) {
+      this.deps.metrics?.recordRestart(dbId);
+    }
     return { ok: true, pid: res.pid };
   }
 
