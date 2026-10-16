@@ -32,7 +32,11 @@ const FILTER_OPS: { value: FilterOp; label: string; needsValue: boolean }[] = [
   { value: "isnull", label: "IS NULL", needsValue: false },
   { value: "notnull", label: "IS NOT NULL", needsValue: false },
 ];
-const PAGE_SIZES = [50, 100, 250, 500].map((n) => ({ id: String(n), label: `${n} / page` }));
+const pageSizes = (sizes: number[]) => sizes.map((n) => ({ id: String(n), label: `${n} / page` }));
+const PAGE_SIZES = pageSizes([50, 100, 250, 500]);
+/** Phone rows are unvirtualised cards, so the page size is capped to keep the DOM small. */
+const PHONE_MAX_LIMIT = 50;
+const PHONE_PAGE_SIZES = pageSizes([25, 50]);
 const PHONE_QUERY = "(max-width: 599px)";
 
 /**
@@ -76,8 +80,13 @@ function TableView({
   const queryClient = useQueryClient();
   const isPhone = useMediaQuery(PHONE_QUERY);
 
-  const [limit, setLimit] = useState(100);
+  const [limit, setLimit] = useState(isPhone ? PHONE_MAX_LIMIT : 100);
   const [offset, setOffset] = useState(0);
+  if (isPhone && limit > PHONE_MAX_LIMIT) {
+    // Desktop -> phone with a big page: clamp now (before any query runs) and restart paging.
+    setLimit(PHONE_MAX_LIMIT);
+    setOffset(0);
+  }
   const [sortCol, setSortCol] = useState<string | undefined>(undefined);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [filters, setFilters] = useState<TableFilter[]>([]);
@@ -419,7 +428,7 @@ function TableView({
                   setLimit(Number(v));
                   setOffset(0);
                 }}
-                options={PAGE_SIZES}
+                options={isPhone ? PHONE_PAGE_SIZES : PAGE_SIZES}
                 className="w-36"
               />
               <Button variant="secondary" className="min-h-11" isDisabled={offset === 0} onPress={() => setOffset(Math.max(0, offset - limit))}>

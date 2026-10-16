@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -396,5 +396,87 @@ describe("data-sql helpers", () => {
     expect(buildPreviewSql("t", [], [{ pk: { a: 1, b: null }, values: { c: "x" } }], [{ a: 2, b: "q" }])).toBe(
       `UPDATE "t" SET "c" = 'x' WHERE "a" = 1 AND "b" IS NULL;\nDELETE FROM "t" WHERE "a" = 2 AND "b" = 'q';`,
     );
+  });
+});
+
+describe("DataGridTab: phone page-size cap", () => {
+  installFakeLayout();
+
+  const optionNumbers = () => screen.getAllByRole("option").map((o) => parseInt(o.textContent ?? "", 10));
+
+  describe("on a phone", () => {
+    installMatchMedia(true);
+
+    test("requests at most 50 rows and offers no larger page size", async () => {
+      const { calls } = usersApi();
+      const user = userEvent.setup();
+      view([USERS]);
+      await screen.findByRole("list", { name: "Rows" });
+      expect(Number(lastRowsUrl(calls).searchParams.get("limit"))).toBeLessThanOrEqual(50);
+      await user.click(screen.getByRole("button", { name: /Rows per page/ }));
+      await screen.findByRole("option", { name: "50 / page" });
+      expect(optionNumbers().length).toBeGreaterThan(0);
+      expect(Math.max(...optionNumbers())).toBeLessThanOrEqual(50);
+    });
+  });
+
+  describe("on desktop", () => {
+    installMatchMedia(false);
+
+    test("still offers 500 per page", async () => {
+      usersApi();
+      const user = userEvent.setup();
+      view([USERS]);
+      await screen.findByRole("table", { name: "Table rows" });
+      await user.click(screen.getByRole("button", { name: /Rows per page/ }));
+      expect(await screen.findByRole("option", { name: "500 / page" })).toBeTruthy();
+    });
+  });
+
+  describe("resizing", () => {
+    const original = window.matchMedia;
+    let phone = false;
+    const listeners = new Set<() => void>();
+    beforeEach(() => {
+      phone = false;
+      listeners.clear();
+      window.matchMedia = ((query: string) => ({
+        get matches() {
+          return query.includes("max-width: 599px") ? phone : false;
+        },
+        media: query,
+        addEventListener: (_: string, fn: () => void) => listeners.add(fn),
+        removeEventListener: (_: string, fn: () => void) => listeners.delete(fn),
+        addListener() {},
+        removeListener() {},
+        dispatchEvent: () => false,
+        onchange: null,
+      })) as unknown as typeof window.matchMedia;
+    });
+    afterEach(() => {
+      window.matchMedia = original;
+    });
+
+    test("desktop at 500 per page clamps to 50 on a phone and restarts at offset 0", async () => {
+      const { calls } = usersApi((c) =>
+        c.method === "GET" && c.url.includes("/tables/users/rows") ? { json: rowsResponse(undefined, USERS, { hasMore: true, total: 900 }) } : undefined,
+      );
+      const user = userEvent.setup();
+      view([USERS]);
+      await screen.findByRole("table", { name: "Table rows" });
+      await user.click(screen.getByRole("button", { name: /Rows per page/ }));
+      await user.click(await screen.findByRole("option", { name: "500 / page" }));
+      await waitFor(() => expect(lastRowsUrl(calls).searchParams.get("limit")).toBe("500"));
+      await user.click(screen.getByRole("button", { name: "Next" }));
+      await waitFor(() => expect(lastRowsUrl(calls).searchParams.get("offset")).toBe("500"));
+
+      phone = true;
+      act(() => listeners.forEach((fn) => fn()));
+      await screen.findByRole("list", { name: "Rows" });
+      await waitFor(() => expect(lastRowsUrl(calls).searchParams.get("limit")).toBe("50"));
+      expect(lastRowsUrl(calls).searchParams.get("offset")).toBe("0");
+      expect(rowsCalls(calls).some((c) => new URL(c.url, "http://x").searchParams.get("limit") === "500" && new URL(c.url, "http://x").searchParams.get("offset") === "500")).toBe(true);
+      expect(rowsCalls(calls).some((c) => new URL(c.url, "http://x").searchParams.get("limit") === "50" && new URL(c.url, "http://x").searchParams.get("offset") === "500")).toBe(false);
+    });
   });
 });
