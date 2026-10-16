@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import type { TrashItem } from "@sqlitend/shared";
 import { api } from "../api/client";
 import { fullTime, relTime } from "../format";
+import { Button, Card, Skeleton } from "@heroui/react";
+import { ErrorAlert } from "../components/ErrorAlert";
 import { DangerConfirmDialog } from "../components/DangerConfirmDialog";
 
 interface Props {
-  onBack: () => void;
   onRestored: (databaseId: string) => void;
 }
 
@@ -16,7 +17,7 @@ function fmtBytes(bytes: number): string {
   return `${(kb / 1024).toFixed(2)} MB`;
 }
 
-export function TrashPage({ onBack, onRestored }: Props) {
+export function TrashPage({ onRestored }: Props) {
   const [items, setItems] = useState<TrashItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,82 +55,56 @@ export function TrashPage({ onBack, onRestored }: Props) {
   };
 
   return (
-    <main className="content standalone">
-      <div className="detail-nav">
-        <button type="button" className="btn ghost small" onClick={onBack}>
-          ← Back
-        </button>
-        <div className="detail-title">
-          <h2>Trash ({items.length})</h2>
-        </div>
-      </div>
+    <main className="flex min-w-0 flex-col gap-4 p-4 md:p-6">
+      <h2 className="text-xl font-semibold">Trash ({items.length})</h2>
+      <p className="m-0 text-sm text-muted">
+        Soft-deleted databases are stopped and moved to <code>&lt;dataRoot&gt;/trash/</code>. They can be restored with
+        a single click or permanently purged before their retention window expires.
+      </p>
 
-      <section className="panel">
-        <p className="hint" style={{ marginTop: 0 }}>
-          Soft-deleted databases are stopped and moved to <code>&lt;dataRoot&gt;/trash/</code>. They can be restored with a single click or permanently purged before their retention window expires.
-        </p>
+      {error && <ErrorAlert>{error}</ErrorAlert>}
 
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-
-        {loading ? (
-          <div className="skeleton-line" style={{ width: "100%", height: "96px" }} />
-        ) : items.length === 0 ? (
-          <p className="muted">Trash is empty.</p>
-        ) : (
-          <div className="table-scroll">
-            <table className="token-table">
-              <thead>
-                <tr>
-                  <th>Database</th>
-                  <th>Slug</th>
-                  <th>Workspace</th>
-                  <th>Size</th>
-                  <th>Trashed</th>
-                  <th>Auto-Purge</th>
-                  <th className="cell-end">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item) => (
-                  <tr key={item.id}>
-                    <td>
-                      <strong>{item.name}</strong>
-                    </td>
-                    <td>
-                      <code>{item.slug}</code>
-                    </td>
-                    <td>{item.workspaceName}</td>
-                    <td>{fmtBytes(item.diskBytes)}</td>
-                    <td title={fullTime(item.trashedAt)}>{relTime(item.trashedAt)}</td>
-                    <td title={fullTime(item.expiresAt)}>{relTime(item.expiresAt)}</td>
-                    <td className="cell-end">
-                      <button
-                        type="button"
-                        className="btn primary small"
-                        disabled={restoringId === item.id}
-                        onClick={() => void handleRestore(item)}
-                      >
-                        {restoringId === item.id ? "Restoring…" : "Restore"}
-                      </button>{" "}
-                      <button
-                        type="button"
-                        className="btn ghost small danger-text"
-                        onClick={() => setPurgingItem(item)}
-                      >
-                        Purge Forever…
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      {loading ? (
+        <Skeleton className="h-24 w-full rounded-xl" />
+      ) : items.length === 0 ? (
+        <p className="text-muted">Trash is empty.</p>
+      ) : (
+        <ul className="m-0 grid list-none grid-cols-1 gap-3 p-0 md:grid-cols-2" aria-label="Trashed databases">
+          {items.map((item) => (
+            <li key={item.id}>
+              <Card className="h-full gap-3 p-4">
+                <div>
+                  <div className="font-semibold">{item.name}</div>
+                  <code className="text-xs text-muted">{item.slug}</code>
+                </div>
+                <dl className="m-0 grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+                  <dt className="text-muted">Workspace</dt>
+                  <dd className="m-0">{item.workspaceName}</dd>
+                  <dt className="text-muted">Size</dt>
+                  <dd className="m-0">{fmtBytes(item.diskBytes)}</dd>
+                  <dt className="text-muted">Trashed</dt>
+                  <dd className="m-0" title={fullTime(item.trashedAt)}>{relTime(item.trashedAt)}</dd>
+                  <dt className="text-muted">Auto-purge</dt>
+                  <dd className="m-0" title={fullTime(item.expiresAt)}>{relTime(item.expiresAt)}</dd>
+                </dl>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="primary"
+                    className="min-h-11"
+                    isPending={restoringId === item.id}
+                    onPress={() => void handleRestore(item)}
+                  >
+                    {restoringId === item.id ? "Restoring…" : "Restore"}
+                  </Button>
+                  <Button variant="danger-soft" className="min-h-11" onPress={() => setPurgingItem(item)}>
+                    Purge Forever…
+                  </Button>
+                </div>
+              </Card>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {purgingItem && (
         <DangerConfirmDialog

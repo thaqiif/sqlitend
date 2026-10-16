@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test",
+    "coverage": "bun test --coverage",
+    "lint": "eslint . --max-warnings 0"
   },
   "dependencies": {
     "@codemirror/autocomplete": "6.20.3",
@@ -15,18 +18,33 @@
     "@codemirror/language": "6.13.1",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.14",
+    "@heroui/react": "3.2.6",
+    "@heroui/styles": "3.2.6",
+    "@internationalized/date": "3.12.4",
+    "@react-aria/ssr": "3.10.1",
+    "@react-aria/utils": "3.34.1",
     "@sqlitend/shared": "*",
     "@tanstack/react-query": "5.104.3",
     "@tanstack/react-table": "8.21.3",
     "@tanstack/react-virtual": "3.14.20",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react": "19.3.1",
+    "react-aria": "3.53.1",
+    "react-aria-components": "1.22.1",
+    "react-dom": "19.3.1",
+    "tailwindcss": "4.3.3",
     "uplot": "1.6.32"
   },
   "devDependencies": {
-    "@types/react": "^18.3.0",
-    "@types/react-dom": "^18.3.0",
+    "@happy-dom/global-registrator": "21.0.3",
+    "@tailwindcss/vite": "4.3.3",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.8",
+    "@types/bun": "1.4.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "^4.3.0",
+    "lightningcss": "1.33.0",
     "typescript": "^5.5.0",
     "vite": "^5.4.0"
   }

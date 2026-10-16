@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { TokenIssued } from "@sqlitend/shared";
+import { Button, Modal as HeroModal } from "@heroui/react";
 import { Modal } from "./Modal";
 
 interface Props {
@@ -28,25 +29,34 @@ export function TokenReveal({ token, onDismiss }: Props) {
   return (
     <Modal
       ariaLabel="Generated token"
-      className="token-reveal"
+      size="lg"
       onClose={onDismiss}
       dismissOnBackdrop={false}
       dismissOnEscape={false}
     >
-      <h2 className="modal-title">Token generated</h2>
-      <p className="hint">
-        Copy it now, or later with Copy in the token list. Scope{" "}
-        <strong>{token.scope}</strong> for <em>{token.dbSlug}</em>.
-      </p>
-      <pre className="token-box" data-testid="token-secret">{token.token}</pre>
-      <div className="modal-actions">
-        <button type="button" className="btn ghost" onClick={copy}>
+      <HeroModal.Header>
+        <HeroModal.Heading>Token generated</HeroModal.Heading>
+      </HeroModal.Header>
+      <HeroModal.Body className="flex flex-col gap-3 p-1">
+        <p className="m-0 text-sm text-muted">
+          Copy it now, or later with Copy in the token list. Scope <strong>{token.scope}</strong> for{" "}
+          <em>{token.dbSlug}</em>.
+        </p>
+        <pre
+          className="m-0 max-h-48 overflow-auto rounded-lg bg-default p-3 font-mono text-xs break-all whitespace-pre-wrap"
+          data-testid="token-secret"
+        >
+          {token.token}
+        </pre>
+      </HeroModal.Body>
+      <HeroModal.Footer>
+        <Button variant="ghost" className="min-h-11" onPress={() => void copy()}>
           {copied ? "Copied" : "Copy"}
-        </button>
-        <button type="button" className="btn primary" onClick={onDismiss}>
+        </Button>
+        <Button variant="primary" className="min-h-11" onPress={onDismiss}>
           I saved it
-        </button>
-      </div>
+        </Button>
+      </HeroModal.Footer>
     </Modal>
   );
 }

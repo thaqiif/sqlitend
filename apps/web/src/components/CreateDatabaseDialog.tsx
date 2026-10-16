@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { Button, Description, Input, Label, Modal as HeroModal, TextField } from "@heroui/react";
 import { Modal } from "./Modal";
+import { ErrorAlert } from "./ErrorAlert";
 
 interface Props {
   open: boolean;
@@ -40,27 +42,28 @@ export function CreateDatabaseDialog({ open, onClose, onSubmit }: Props) {
 
   return (
     <Modal ariaLabel="Create database" onClose={onClose}>
-      <h2 className="modal-title">Create database</h2>
       <form onSubmit={handleSubmit}>
-        <label className="field">
-          <span className="field-label">Name</span>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. analytics"
-            disabled={busy}
-          />
-        </label>
-        <p className="hint">Names are unique within a workspace. The public hostname uses a random ID, not the name.</p>
-        {error && <p className="error" role="alert">{error}</p>}
-        <div className="modal-actions">
-          <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>
+        <HeroModal.Header>
+          <HeroModal.Heading>Create database</HeroModal.Heading>
+        </HeroModal.Header>
+        <HeroModal.Body className="flex flex-col gap-3 p-1">
+          <TextField fullWidth value={name} onChange={setName} isDisabled={busy} autoFocus>
+            <Label>Name</Label>
+            <Input placeholder="e.g. analytics" className="min-h-11" />
+            <Description>
+              Names are unique within a workspace. The public hostname uses a random ID, not the name.
+            </Description>
+          </TextField>
+          {error && <ErrorAlert>{error}</ErrorAlert>}
+        </HeroModal.Body>
+        <HeroModal.Footer>
+          <Button variant="ghost" className="min-h-11" onPress={onClose} isDisabled={busy}>
             Cancel
-          </button>
-          <button type="submit" className="btn primary" disabled={busy || !name.trim()}>
+          </Button>
+          <Button type="submit" variant="primary" className="min-h-11" isDisabled={busy || !name.trim()}>
             Create
-          </button>
-        </div>
+          </Button>
+        </HeroModal.Footer>
       </form>
     </Modal>
   );

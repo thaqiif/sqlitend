@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { BackupStatus, Database, Metrics, MetricsOverviewResponse, Workspace } from "@sqlitend/shared";
 import { api } from "../api/client";
 import { shortSqldVersion } from "../format";
+import { Button, Card, Label, ListBox, Modal as HeroModal, Select, Skeleton, Switch } from "@heroui/react";
+import { ErrorAlert } from "../components/ErrorAlert";
+import { StatusChip } from "../components/StatusChip";
+import { backupTone, dbStatusTone, stabilityTone, verifyTone } from "../components/status-tones";
 import { CreateDatabaseDialog } from "../components/CreateDatabaseDialog";
 import { CreateWorkspaceDialog } from "../components/CreateWorkspaceDialog";
 import { DangerConfirmDialog } from "../components/DangerConfirmDialog";
@@ -34,8 +38,8 @@ function MiniSparkline({ values, color = "#4f8cff" }: { values: (number | null)[
     })
     .join(" ");
   return (
-    <svg width={w} height={h} className="sparkline-svg" aria-hidden="true">
-      <polyline fill="none" stroke={color} strokeWidth="1.75" points={pts} />
+    <svg width={w} height={h} className="shrink-0" aria-hidden="true">
+      <polyline fill="none" style={{ stroke: color }} strokeWidth="1.75" points={pts} />
     </svg>
   );
 }
@@ -59,9 +63,9 @@ interface MiniMetricProps {
 
 function MiniMetric({ label, value }: MiniMetricProps) {
   return (
-    <div className="mini-metric">
-      <span className="mini-metric-label">{label}</span>
-      <span className="mini-metric-value">{value}</span>
+    <div className="flex min-w-0 flex-col">
+      <span className="text-xs text-muted">{label}</span>
+      <span className="text-sm font-semibold tabular-nums">{value}</span>
     </div>
   );
 }
@@ -194,203 +198,192 @@ export function DatabasesPage({
 
   const dbHost = (db: Database) => (db.port != null ? `${publicHost}:${db.port}` : null);
 
+  const workspaceSelectItems = workspaces.map((w) => (
+    <ListBox.Item key={w.id} id={w.id} textValue={w.name}>
+      {w.name} ({w.slug})
+      <ListBox.ItemIndicator />
+    </ListBox.Item>
+  ));
+
   return (
-    <div className="page-layout">
-      <aside className="sidebar" aria-label="Workspaces">
-        <div className="sidebar-header">
-          <span className="sidebar-title">Workspaces</span>
-          <button
-            type="button"
-            className="btn ghost small"
-            aria-label="Create workspace"
-            onClick={() => setShowCreateWorkspace(true)}
-          >
+    <div className="grid min-w-0 flex-1 grid-cols-1 md:grid-cols-[16rem_1fr]">
+      <aside className="hidden border-r border-separator p-4 md:block" aria-label="Workspaces">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold">Workspaces</span>
+          <Button variant="ghost" size="sm" className="min-h-11" onPress={() => setShowCreateWorkspace(true)}>
             + New
-          </button>
+          </Button>
         </div>
-        <nav className="workspace-list">
-          {workspaces.length === 0 ? (
-            <p className="muted sidebar-empty">
-              No workspaces yet.
-              <button
-                type="button"
-                className="btn primary small"
-                onClick={() => setShowCreateWorkspace(true)}
-              >
-                Create one
-              </button>
-            </p>
-          ) : (
-            workspaces.map((w) => {
+        {workspaces.length === 0 ? (
+          <div className="flex flex-col items-start gap-2 text-sm text-muted">
+            No workspaces yet.
+            <Button variant="primary" className="min-h-11" onPress={() => setShowCreateWorkspace(true)}>
+              Create one
+            </Button>
+          </div>
+        ) : (
+          <nav className="flex flex-col gap-1">
+            {workspaces.map((w) => {
               const active = w.id === selectedWorkspaceId;
               return (
-                <div key={w.id} className={`workspace-row${active ? " active" : ""}`}>
-                  <button
-                    type="button"
-                    className="workspace-btn"
-                    onClick={() => onSelectWorkspace(w.id)}
-                  >
-                    <span className="workspace-name">{w.name}</span>
-                    <span className="workspace-slug">{w.slug}</span>
-                  </button>
-                </div>
+                <button
+                  key={w.id}
+                  type="button"
+                  aria-current={active ? "true" : undefined}
+                  onClick={() => onSelectWorkspace(w.id)}
+                  className={`flex min-h-11 flex-col justify-center rounded-lg px-3 text-left ${
+                    active ? "bg-accent-soft text-accent-soft-foreground" : "hover:bg-default"
+                  }`}
+                >
+                  <span className="truncate text-sm font-medium">{w.name}</span>
+                  <span className="truncate text-xs text-muted">{w.slug}</span>
+                </button>
               );
-            })
-          )}
-        </nav>
+            })}
+          </nav>
+        )}
       </aside>
 
-      <main className="content">
+      <main className="flex min-w-0 flex-col gap-4 p-4 md:p-6">
+        <div className="flex items-end gap-2 md:hidden">
+          {workspaces.length > 0 ? (
+            <Select
+              fullWidth
+              aria-label="Workspace picker"
+              value={selectedWorkspaceId}
+              onChange={(key) => key && onSelectWorkspace(String(key))}
+              className="min-w-0 flex-1"
+            >
+              <Label>Workspace</Label>
+              <Select.Trigger className="min-h-11">
+                <Select.Value />
+                <Select.Indicator />
+              </Select.Trigger>
+              <Select.Popover>
+                <ListBox>{workspaceSelectItems}</ListBox>
+              </Select.Popover>
+            </Select>
+          ) : (
+            <span className="flex-1 text-sm text-muted">No workspaces yet.</span>
+          )}
+          <Button variant="secondary" className="min-h-11" onPress={() => setShowCreateWorkspace(true)}>
+            + Workspace
+          </Button>
+        </div>
+
         {overview && (
-          <section className="system-overview-strip" aria-label="System resource overview">
-            <div className="overview-chip">
-              <span className="mini-metric-label">Instances</span>
-              <strong>
-                {overview.totals.runningDbs} running · {overview.totals.stoppedDbs} stopped
-                {overview.totals.crashedOrFailedDbs > 0 ? ` · ${overview.totals.crashedOrFailedDbs} faulted` : ""}
-              </strong>
-            </div>
-            <div className="overview-chip">
-              <span className="mini-metric-label">Total Disk / WAL</span>
-              <strong>
-                {fmtBytesCompact(overview.totals.totalDiskBytes)} ({fmtBytesCompact(overview.totals.totalWalBytes)} WAL)
-              </strong>
-            </div>
-            <div className="overview-chip">
-              <span className="mini-metric-label">Total RSS</span>
-              <strong>{fmtBytesCompact(overview.totals.totalMemoryBytes)}</strong>
-            </div>
-            <div className="overview-chip">
-              <span className="mini-metric-label">Queries</span>
-              <strong>
-                {overview.totals.totalQueries.toLocaleString()} ({overview.totals.totalErrors} err)
-              </strong>
-            </div>
+          <section aria-label="System resource overview" className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+            <OverviewTile label="Instances">
+              {overview.totals.runningDbs} running · {overview.totals.stoppedDbs} stopped
+              {overview.totals.crashedOrFailedDbs > 0 ? ` · ${overview.totals.crashedOrFailedDbs} faulted` : ""}
+            </OverviewTile>
+            <OverviewTile label="Total Disk / WAL">
+              {fmtBytesCompact(overview.totals.totalDiskBytes)} ({fmtBytesCompact(overview.totals.totalWalBytes)} WAL)
+            </OverviewTile>
+            <OverviewTile label="Total RSS">{fmtBytesCompact(overview.totals.totalMemoryBytes)}</OverviewTile>
+            <OverviewTile label="Queries">
+              {overview.totals.totalQueries.toLocaleString()} ({overview.totals.totalErrors} err)
+            </OverviewTile>
           </section>
         )}
 
-        <div className="content-header">
-          <div>
-            <h2>{activeWorkspace?.name ?? "Databases"}</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="truncate text-xl font-semibold">{activeWorkspace?.name ?? "Databases"}</h2>
             {activeWorkspace && (
-              <span className="muted small">
+              <span className="text-xs text-muted">
                 slug: <code>{activeWorkspace.slug}</code> ·{" "}
                 {activeWorkspace.protected ? "🔒 Protected" : "🔓 Unprotected"}
               </span>
             )}
           </div>
-          <div className="header-btn-group">
+          <div className="flex flex-wrap gap-2">
             {activeWorkspace && (
-              <button
-                type="button"
-                className="btn ghost small"
-                onClick={() => setShowWorkspaceSettings(true)}
-              >
+              <Button variant="secondary" className="min-h-11" onPress={() => setShowWorkspaceSettings(true)}>
                 Workspace Settings
-              </button>
+              </Button>
             )}
-            <button
-              type="button"
-              className="btn primary"
-              disabled={!selectedWorkspaceId}
-              onClick={() => setShowCreateDatabase(true)}
+            <Button
+              variant="primary"
+              className="min-h-11"
+              isDisabled={!selectedWorkspaceId}
+              onPress={() => setShowCreateDatabase(true)}
             >
               + New database
-            </button>
+            </Button>
           </div>
         </div>
 
-        {listError && databases.length > 0 && (
-          <p className="list-banner error" role="alert">{listError}</p>
-        )}
+        {listError && databases.length > 0 && <ErrorAlert>{listError}</ErrorAlert>}
 
         {loading && databases.length === 0 ? (
-          <p className="muted">Loading databases…</p>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3" aria-label="Loading databases">
+            <Skeleton className="h-40 rounded-xl" />
+            <Skeleton className="hidden h-40 rounded-xl md:block" />
+          </div>
         ) : databases.length === 0 ? (
           listError ? (
-            <p className="error" role="alert">{listError}</p>
+            <ErrorAlert>{listError}</ErrorAlert>
           ) : (
-            <div className="empty">
-              <p>No databases in this workspace.</p>
-              <button
-                type="button"
-                className="btn primary"
-                onClick={() => setShowCreateDatabase(true)}
-              >
+            <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border p-8 text-center">
+              <p className="m-0">No databases in this workspace.</p>
+              <Button variant="primary" className="min-h-11" onPress={() => setShowCreateDatabase(true)}>
                 Create your first database
-              </button>
+              </Button>
             </div>
           )
         ) : (
-          <section className="db-grid" aria-label="Databases">
+          <section className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3" aria-label="Databases">
             {databases.map((db) => {
               const m = metrics[db.id];
               const summary = overview?.databases[db.id];
+              const v = shortSqldVersion(db.sqldVersion);
               return (
-                <article key={db.id} className="db-card">
-                  <header className="db-card-header">
+                <Card key={db.id} className="min-w-0 gap-3 p-4">
+                  <div className="flex items-start justify-between gap-2">
                     <button
                       type="button"
-                      className="db-card-link"
+                      className="-m-1 min-h-11 min-w-0 flex-1 rounded-lg p-1 text-left"
                       onClick={() => onOpenDatabase(db.id)}
                     >
-                      <span className="db-card-title">
-                        <h3>{db.name}</h3>
-                        {db.slug !== db.name && <span className="db-slug">{db.slug}</span>}
-                      </span>
+                      <h3 className="truncate text-base font-semibold">{db.name}</h3>
+                      {db.slug !== db.name && <span className="block truncate text-xs text-muted">{db.slug}</span>}
                     </button>
-                    <div className="card-badges-right">
+                    <div className="flex flex-wrap justify-end gap-1">
                       {summary && (
-                        <span
-                          className={`stability-badge stability-pill-${summary.stability.level}`}
+                        <StatusChip
+                          tone={stabilityTone(summary.stability.level)}
                           title={`${summary.stability.label}: ${summary.stability.rule} (${summary.stability.availabilityPct24h}% 24h avail)`}
                         >
                           {summary.stability.label}
-                        </span>
+                        </StatusChip>
                       )}
-                      <span className={`status-badge status-${db.status}`}>{db.status}</span>
+                      <StatusChip tone={dbStatusTone(db.status)}>{db.status}</StatusChip>
                     </div>
-                  </header>
-                  <div className="db-meta">
-                    <span className="db-endpoint mono" title={db.publicUrl ?? dbHost(db) ?? undefined}>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted">
+                    <span className="min-w-0 truncate font-mono" title={db.publicUrl ?? dbHost(db) ?? undefined}>
                       {db.publicUrl ? db.publicUrl.replace(/^https:\/\//, "") : (dbHost(db) ?? "no port")}
                     </span>
-                    {(() => {
-                      const v = shortSqldVersion(db.sqldVersion);
-                      return v ? <span className="muted">sqld {v}</span> : null;
-                    })()}
+                    {v && <span>sqld {v}</span>}
                   </div>
                   <BackupBadges b={backups[db.id]} />
-                  <div className="db-card-metrics">
-                    <MiniMetric
-                      label="CPU"
-                      value={
-                        m == null || m.cpuPct == null ? "—" : `${m.cpuPct.toFixed(1)}%`
-                      }
-                    />
+                  <div className="grid grid-cols-4 gap-2">
+                    <MiniMetric label="CPU" value={m == null || m.cpuPct == null ? "—" : `${m.cpuPct.toFixed(1)}%`} />
                     <MiniMetric
                       label="Mem"
-                      value={
-                        m == null
-                          ? "—"
-                          : `${Math.max(0, Math.round(m.memoryBytes / 1048576))} MB`
-                      }
+                      value={m == null ? "—" : `${Math.max(0, Math.round(m.memoryBytes / 1048576))} MB`}
                     />
-                    <MiniMetric
-                      label="Disk"
-                      value={m == null ? "—" : fmtBytesCompact(m.diskBytes)}
-                    />
-                    {summary?.latency.p95Ms != null && (
-                      <MiniMetric label="p95" value={`${summary.latency.p95Ms}ms`} />
-                    )}
+                    <MiniMetric label="Disk" value={m == null ? "—" : fmtBytesCompact(m.diskBytes)} />
+                    {summary?.latency.p95Ms != null && <MiniMetric label="p95" value={`${summary.latency.p95Ms}ms`} />}
                   </div>
                   {summary && summary.sparkline.memoryBytes.length > 1 && (
-                    <div className="card-sparkline-row">
-                      <span className="muted small">Mem trend</span>
-                      <MiniSparkline values={summary.sparkline.memoryBytes} color="#3fb950" />
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted">Mem trend</span>
+                      <MiniSparkline values={summary.sparkline.memoryBytes} color="var(--success)" />
                     </div>
                   )}
-                </article>
+                </Card>
               );
             })}
           </section>
@@ -408,64 +401,70 @@ export function DatabasesPage({
         onSubmit={handleCreateDatabase}
       />
 
-      {/* Workspace Settings & Danger Zone Modal */}
+      {/* Workspace Settings & Danger Zone. Deleting lives only here, never in list rows. */}
       {showWorkspaceSettings && activeWorkspace && (
         <Modal ariaLabel="Workspace settings" onClose={() => setShowWorkspaceSettings(false)}>
-          <h2 className="modal-title">Workspace Settings — {activeWorkspace.name}</h2>
-          <p className="muted small">
-            Slug: <code>{activeWorkspace.slug}</code>
-          </p>
+          <HeroModal.Header>
+            <HeroModal.Heading>Workspace Settings — {activeWorkspace.name}</HeroModal.Heading>
+          </HeroModal.Header>
+          <HeroModal.Body className="flex flex-col gap-4 p-1">
+            <p className="m-0 text-xs text-muted">
+              Slug: <code>{activeWorkspace.slug}</code>
+            </p>
 
-          <div className="danger-zone-box">
-            <h3 className="danger-title">Danger Zone</h3>
-            <div className="danger-row">
-              <div>
-                <strong>Delete protection</strong>
-                <p className="muted small" style={{ margin: "0.2rem 0 0" }}>
-                  When enabled, this workspace cannot be deleted via UI or API (`423 protected`).
-                </p>
+            <section className="flex flex-col gap-4 rounded-lg border border-danger/40 p-3" aria-label="Danger zone">
+              <h3 className="text-sm font-semibold text-danger">Danger Zone</h3>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <strong className="text-sm">Delete protection</strong>
+                  <p className="m-0 mt-1 text-xs text-muted">
+                    When enabled, this workspace cannot be deleted via UI or API (`423 protected`).
+                  </p>
+                </div>
+                <Switch
+                  isSelected={activeWorkspace.protected}
+                  isDisabled={protectionBusy}
+                  onChange={(next) => void handleToggleWorkspaceProtection(next)}
+                  aria-label="Delete protection"
+                  className="min-h-11"
+                >
+                  <Switch.Control>
+                    <Switch.Thumb />
+                  </Switch.Control>
+                  <Switch.Content>{activeWorkspace.protected ? "Protected" : "Unprotected"}</Switch.Content>
+                </Switch>
               </div>
-              <label className="write-toggle-chip">
-                <input
-                  type="checkbox"
-                  checked={activeWorkspace.protected}
-                  disabled={protectionBusy}
-                  onChange={(e) => void handleToggleWorkspaceProtection(e.target.checked)}
-                />
-                <span>{activeWorkspace.protected ? "Protected" : "Unprotected"}</span>
-              </label>
-            </div>
 
-            <div className="danger-row" style={{ marginTop: "0.85rem" }}>
-              <div>
-                <strong>Delete workspace</strong>
-                <p className="muted small" style={{ margin: "0.2rem 0 0" }}>
-                  {databases.length > 0
-                    ? `Workspace contains ${databases.length} database(s) — move or purge all databases before deleting.`
-                    : activeWorkspace.protected
-                      ? "Disable delete protection above to enable workspace deletion."
-                      : "Permanently remove this empty workspace."}
-                </p>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <strong className="text-sm">Delete workspace</strong>
+                  <p className="m-0 mt-1 text-xs text-muted">
+                    {databases.length > 0
+                      ? `Workspace contains ${databases.length} database(s) — move or purge all databases before deleting.`
+                      : activeWorkspace.protected
+                        ? "Disable delete protection above to enable workspace deletion."
+                        : "Permanently remove this empty workspace."}
+                  </p>
+                </div>
+                <Button
+                  variant="danger"
+                  className="min-h-11"
+                  isDisabled={activeWorkspace.protected || databases.length > 0}
+                  onPress={() => {
+                    setShowWorkspaceSettings(false);
+                    setShowWorkspaceDeleteConfirm(true);
+                  }}
+                >
+                  Delete Workspace…
+                </Button>
               </div>
-              <button
-                type="button"
-                className="btn danger small"
-                disabled={activeWorkspace.protected || databases.length > 0}
-                onClick={() => {
-                  setShowWorkspaceSettings(false);
-                  setShowWorkspaceDeleteConfirm(true);
-                }}
-              >
-                Delete Workspace…
-              </button>
-            </div>
-          </div>
-
-          <div className="modal-actions">
-            <button type="button" className="btn ghost" onClick={() => setShowWorkspaceSettings(false)}>
+            </section>
+          </HeroModal.Body>
+          <HeroModal.Footer>
+            <Button variant="ghost" className="min-h-11" onPress={() => setShowWorkspaceSettings(false)}>
               Close
-            </button>
-          </div>
+            </Button>
+          </HeroModal.Footer>
         </Modal>
       )}
 
@@ -486,21 +485,36 @@ export function DatabasesPage({
   );
 }
 
+function OverviewTile({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Card className="gap-0.5 p-3">
+      <span className="text-xs text-muted">{label}</span>
+      <strong className="text-sm">{children}</strong>
+    </Card>
+  );
+}
+
 /** Backup + restore-verify state at a glance (hidden while loading). */
 function BackupBadges({ b }: { b: BackupStatus | undefined }) {
   if (!b) return null;
-  if (!b.enabled) return <p className="db-badges"><span className="scope-badge backup-disabled">not backed up</span></p>;
+  if (!b.enabled) {
+    return (
+      <div className="flex flex-wrap gap-1">
+        <StatusChip tone="default">not backed up</StatusChip>
+      </div>
+    );
+  }
   const v = b.verify?.health;
   return (
-    <p className="db-badges">
-      <span className={`scope-badge backup-${b.state}`} title={b.lastError ?? undefined}>
+    <div className="flex flex-wrap gap-1">
+      <StatusChip tone={backupTone(b.state)} title={b.lastError ?? undefined}>
         backup {b.state}
-      </span>
+      </StatusChip>
       {v && (
-        <span className={`scope-badge verify-${v}`} title={b.verify?.lastDetail ?? undefined}>
+        <StatusChip tone={verifyTone(v)} title={b.verify?.lastDetail ?? undefined}>
           verify {v}
-        </span>
+        </StatusChip>
       )}
-    </p>
+    </div>
   );
 }

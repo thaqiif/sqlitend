@@ -1,7 +1,9 @@
 import { useState } from "react";
 import type { Database, Workspace } from "@sqlitend/shared";
 import { api } from "../api/client";
+import { Button, Description, Input, Label, ListBox, Modal as HeroModal, Select, TextField } from "@heroui/react";
 import { Modal } from "./Modal";
+import { ErrorAlert } from "./ErrorAlert";
 
 /** Restore a replica AS A NEW database (never in place), optionally to a point in time. */
 export function RestoreDialog({
@@ -45,46 +47,63 @@ export function RestoreDialog({
 
   return (
     <Modal ariaLabel="Restore backup" onClose={onClose}>
-      <h2 className="modal-title">Restore as a new database</h2>
-      <p className="hint">
-        Restores <strong>{sourceLabel}</strong> from its S3 backup into a <em>new</em> database. The original is not
-        touched. The restore is checked with <code>integrity_check</code> before it starts. It gets its own tokens and
-        hostname.
-      </p>
       <form
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
         }}
       >
-        <label className="field">
-          <span className="field-label">New database name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={128} required disabled={busy} autoFocus />
-        </label>
-        <label className="field">
-          <span className="field-label">Workspace</span>
-          <select value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} disabled={busy}>
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span className="field-label">Point in time (optional, your local time)</span>
-          <input type="datetime-local" step={1} value={at} onChange={(e) => setAt(e.target.value)} disabled={busy} />
-        </label>
-        <p className="hint">Blank restores the latest state. A time restores everything committed before it.</p>
-        {error && <p className="error" role="alert">{error}</p>}
-        <div className="modal-actions">
-          <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>
+        <HeroModal.Header>
+          <HeroModal.Heading>Restore as a new database</HeroModal.Heading>
+        </HeroModal.Header>
+        <HeroModal.Body className="flex flex-col gap-4 p-1">
+          <p className="m-0 text-sm text-muted">
+            Restores <strong>{sourceLabel}</strong> from its S3 backup into a <em>new</em> database. The original is
+            not touched. The restore is checked with <code>integrity_check</code> before it starts. It gets its own
+            tokens and hostname.
+          </p>
+          <TextField fullWidth value={name} onChange={setName} isRequired isDisabled={busy} autoFocus>
+            <Label>New database name</Label>
+            <Input maxLength={128} className="min-h-11" />
+          </TextField>
+          <Select
+            fullWidth
+            aria-label="Workspace"
+            value={workspaceId}
+            onChange={(key) => key && setWorkspaceId(String(key))}
+            isDisabled={busy}
+          >
+            <Label>Workspace</Label>
+            <Select.Trigger className="min-h-11">
+              <Select.Value />
+              <Select.Indicator />
+            </Select.Trigger>
+            <Select.Popover>
+              <ListBox>
+                {workspaces.map((w) => (
+                  <ListBox.Item key={w.id} id={w.id} textValue={w.name}>
+                    {w.name}
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                ))}
+              </ListBox>
+            </Select.Popover>
+          </Select>
+          <TextField fullWidth value={at} onChange={setAt} isDisabled={busy}>
+            <Label>Point in time (optional, your local time)</Label>
+            <Input type="datetime-local" step={1} className="min-h-11" />
+            <Description>Blank restores the latest state. A time restores everything committed before it.</Description>
+          </TextField>
+          {error && <ErrorAlert>{error}</ErrorAlert>}
+        </HeroModal.Body>
+        <HeroModal.Footer>
+          <Button variant="ghost" className="min-h-11" onPress={onClose} isDisabled={busy}>
             Cancel
-          </button>
-          <button type="submit" className="btn primary" disabled={busy || !name.trim() || !workspaceId}>
+          </Button>
+          <Button type="submit" variant="primary" className="min-h-11" isDisabled={busy || !name.trim() || !workspaceId}>
             Restore
-          </button>
-        </div>
+          </Button>
+        </HeroModal.Footer>
       </form>
     </Modal>
   );

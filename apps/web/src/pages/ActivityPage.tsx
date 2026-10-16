@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
+import { Button, Card, Table } from "@heroui/react";
 import type { AuditEntry } from "@sqlitend/shared";
 import { api } from "../api/client";
+import { ErrorAlert } from "../components/ErrorAlert";
+import { StatusChip } from "../components/StatusChip";
+import { auditTone } from "../components/status-tones";
 
 const PAGE = 100;
 
 /** Audit log: logins (incl. failures) and every change, newest first. */
-export function ActivityPage({ onBack }: { onBack: () => void }) {
+export function ActivityPage() {
   const [rows, setRows] = useState<AuditEntry[]>([]);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,56 +30,53 @@ export function ActivityPage({ onBack }: { onBack: () => void }) {
   }, []);
 
   return (
-    <main className="shell">
-      <div className="panel-header">
-        <button type="button" className="btn ghost small" onClick={onBack}>
-          ← Back
-        </button>
-        <h2 className="panel-title">Activity</h2>
-      </div>
-      {error && <p className="error" role="alert">{error}</p>}
-      <section className="panel">
+    <main className="flex min-w-0 flex-col gap-4 p-4 md:p-6">
+      <h2 className="text-xl font-semibold">Activity</h2>
+      {error && <ErrorAlert>{error}</ErrorAlert>}
+      <Card className="min-w-0 gap-3 p-0 sm:p-2">
         {rows.length === 0 ? (
-          <p className="muted">No activity yet.</p>
+          <p className="m-0 p-4 text-muted">No activity yet.</p>
         ) : (
-          <div className="table-scroll">
-          <table className="token-table">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Action</th>
-                <th>Outcome</th>
-                <th>Who</th>
-                <th>IP</th>
-                <th>Target</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id}>
-                  <td>{new Date(r.at).toLocaleString()}</td>
-                  <td>{r.action}</td>
-                  <td>
-                    <span className={`scope-badge audit-${r.outcome}`} title={r.detail ?? undefined}>
-                      {r.outcome}
-                      {r.detail ? ` · ${r.detail}` : ""}
-                    </span>
-                  </td>
-                  <td>{r.actor}</td>
-                  <td>{r.ip ?? "—"}</td>
-                  <td className="mono">{r.target ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          </div>
+          <Table.Root>
+            <Table.ScrollContainer>
+              <Table.Content aria-label="Audit log" className="min-w-[44rem]">
+                <Table.Header>
+                  <Table.Column isRowHeader id="when">When</Table.Column>
+                  <Table.Column id="action">Action</Table.Column>
+                  <Table.Column id="outcome">Outcome</Table.Column>
+                  <Table.Column id="who">Who</Table.Column>
+                  <Table.Column id="ip">IP</Table.Column>
+                  <Table.Column id="target">Target</Table.Column>
+                </Table.Header>
+                <Table.Body>
+                  {rows.map((r) => (
+                    <Table.Row key={r.id} id={String(r.id)}>
+                      <Table.Cell className="whitespace-nowrap">{new Date(r.at).toLocaleString()}</Table.Cell>
+                      <Table.Cell>{r.action}</Table.Cell>
+                      <Table.Cell>
+                        <StatusChip tone={auditTone(r.outcome)} title={r.detail ?? undefined}>
+                          {r.outcome}
+                          {r.detail ? ` · ${r.detail}` : ""}
+                        </StatusChip>
+                      </Table.Cell>
+                      <Table.Cell>{r.actor}</Table.Cell>
+                      <Table.Cell>{r.ip ?? "—"}</Table.Cell>
+                      <Table.Cell className="font-mono text-xs">{r.target ?? "—"}</Table.Cell>
+                    </Table.Row>
+                  ))}
+                </Table.Body>
+              </Table.Content>
+            </Table.ScrollContainer>
+          </Table.Root>
         )}
         {!done && rows.length > 0 && (
-          <button type="button" className="btn ghost small" onClick={() => void load(rows.at(-1)!.id)}>
-            Load older
-          </button>
+          <div className="p-3">
+            <Button variant="secondary" className="min-h-11" onPress={() => void load(rows.at(-1)!.id)}>
+              Load older
+            </Button>
+          </div>
         )}
-      </section>
+      </Card>
     </main>
   );
 }

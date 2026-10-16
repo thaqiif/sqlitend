@@ -15,11 +15,24 @@
     "dev": "bun --watch run apps/server/src/index.ts",
     "build": "bun run --cwd apps/web build",
     "start": "bun run apps/server/src/index.ts",
-    "test": "bun test apps/server",
-    "e2e": "bun run scripts/e2e-killer-workflow.mjs"
+    "test": "bun test apps/server && bun run test:web",
+    "e2e": "bun run scripts/e2e-killer-workflow.mjs",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc -p apps/server/tsconfig.json --noEmit && tsc -p packages/shared/tsconfig.json --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
+    "test:server": "bun test apps/server",
+    "test:web": "bun run --cwd apps/web test",
+    "coverage": "bun test --coverage apps/server && bun run --cwd apps/web coverage",
+    "check": "bun run lint && bun run typecheck && bun run test && bun run build"
   },
   "license": "MIT",
   "devDependencies": {
-    "@libsql/client": "^0.14.0"
+    "@eslint/js": "9.39.5",
+    "@libsql/client": "^0.14.0",
+    "eslint": "9.39.5",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.7",
+    "globals": "17.13.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.2"
   }
 }

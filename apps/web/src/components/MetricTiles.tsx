@@ -1,4 +1,8 @@
+import type { ReactNode } from "react";
+import { Card } from "@heroui/react";
 import type { Metrics } from "@sqlitend/shared";
+import { StatusChip } from "./StatusChip";
+import { dbStatusTone } from "./status-tones";
 
 interface Props {
   metrics: Metrics | null;
@@ -19,32 +23,26 @@ function fmtUptime(sec: number): string {
   return `${m}m`;
 }
 
+function Tile({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Card className="gap-1 p-3">
+      <span className="text-xs text-muted">{label}</span>
+      <span className="text-lg font-semibold tabular-nums">{children}</span>
+    </Card>
+  );
+}
+
 export function MetricTiles({ metrics }: Props) {
   const cpu = metrics == null || metrics.cpuPct == null ? null : metrics.cpuPct;
   return (
-    <div className="metric-grid">
-      <div className="metric-tile">
-        <span className="metric-label">CPU</span>
-        <span className="metric-value">{cpu == null ? "—" : `${cpu.toFixed(1)}%`}</span>
-      </div>
-      <div className="metric-tile">
-        <span className="metric-label">Memory</span>
-        <span className="metric-value">{metrics == null ? "—" : fmtBytes(metrics.memoryBytes)}</span>
-      </div>
-      <div className="metric-tile">
-        <span className="metric-label">Disk</span>
-        <span className="metric-value">{metrics == null ? "—" : fmtBytes(metrics.diskBytes)}</span>
-      </div>
-      <div className="metric-tile">
-        <span className="metric-label">Uptime</span>
-        <span className="metric-value">{metrics == null ? "—" : fmtUptime(metrics.uptimeSec)}</span>
-      </div>
-      <div className="metric-tile">
-        <span className="metric-label">Status</span>
-        <span className={`status-badge status-${metrics?.status ?? "unknown"}`}>
-          {metrics?.status ?? "—"}
-        </span>
-      </div>
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+      <Tile label="CPU">{cpu == null ? "—" : `${cpu.toFixed(1)}%`}</Tile>
+      <Tile label="Memory">{metrics == null ? "—" : fmtBytes(metrics.memoryBytes)}</Tile>
+      <Tile label="Disk">{metrics == null ? "—" : fmtBytes(metrics.diskBytes)}</Tile>
+      <Tile label="Uptime">{metrics == null ? "—" : fmtUptime(metrics.uptimeSec)}</Tile>
+      <Tile label="Status">
+        {metrics ? <StatusChip tone={dbStatusTone(metrics.status)}>{metrics.status}</StatusChip> : "—"}
+      </Tile>
     </div>
   );
 }

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, UNAUTHENTICATED_EVENT } from "./api/client";
-import { LoginPage, SetupRequired } from "./pages/LoginPage";
+import { Spinner } from "@heroui/react";
+import { AuthShell, LoginPage, SetupRequired } from "./pages/LoginPage";
+import { ErrorAlert } from "./components/ErrorAlert";
 import { App } from "./App";
 
 type State = "loading" | "setup" | "login" | "in" | "open";
@@ -36,13 +38,18 @@ export function AuthGate() {
 
   if (error) {
     return (
-      <main className="shell">
-        <h1 className="brand-title">sqlitend</h1>
-        <p className="error" role="alert">{error}</p>
-      </main>
+      <AuthShell>
+        <ErrorAlert>{error}</ErrorAlert>
+      </AuthShell>
     );
   }
-  if (state === "loading") return <main className="shell"><p className="muted">Loading…</p></main>;
+  if (state === "loading") {
+    return (
+      <AuthShell>
+        <Spinner aria-label="Loading" />
+      </AuthShell>
+    );
+  }
   if (state === "setup") return <SetupRequired onRetry={() => void check()} />;
   if (state === "login") return <LoginPage onLoggedIn={() => setState("in")} />;
   return <App onLogout={state === "in" ? logout : undefined} />;

@@ -1,0 +1,18 @@
+# Applies when tests run from apps/web (`bun run --cwd apps/web test`); the server's tests are unaffected.
+[test]
+preload = ["./test/setup.ts"]
+coverageSkipTestFiles = true
+coverageReporter = ["text"]
+# Fails `bun test --coverage` when any loaded file is below 70% lines or functions.
+coverageThreshold = 0.7
+# Phase-2 files (still legacy, rewritten and tested in phase 2) are excluded for now.
+coveragePathIgnorePatterns = [
+  "test/**",
+  "src/pages/DatabaseDetail.tsx",
+  "src/components/DataGridTab.tsx",
+  "src/components/StructureTab.tsx",
+  "src/components/SqlConsoleTab.tsx",
+  "src/components/MetricsTab.tsx",
+  "src/components/VirtualResultTable.tsx",
+  "src/components/CodeMirrorSqlEditor.tsx",
+]

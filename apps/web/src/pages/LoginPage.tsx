@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+import { Button, Card, Input, Label, TextField } from "@heroui/react";
+import { ErrorAlert } from "../components/ErrorAlert";
 import { api, ApiError } from "../api/client";
 
 /** Password (+ authenticator code when the server asks for one). */
@@ -30,73 +32,84 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   }
 
   return (
-    <main className="shell auth-shell">
-      <h1 className="brand-title">sqlitend</h1>
+    <AuthShell>
       <form
-        className="panel auth-panel"
+        className="w-full"
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
         }}
       >
-        <h2 className="panel-title">Sign in</h2>
-        <label className="field">
-          <span className="field-label">Password or Admin Token</span>
-          <input
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={busy || needTotp}
-            autoFocus
-            required
-          />
-        </label>
-        {needTotp && (
-          <label className="field">
-            <span className="field-label">Authenticator code</span>
-            <input
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              pattern="\d{6}"
-              maxLength={6}
-              value={totp}
-              onChange={(e) => setTotp(e.target.value.replace(/\D/g, ""))}
-              disabled={busy}
-              autoFocus
-              required
-            />
-          </label>
-        )}
-        {error && <p className="error" role="alert">{error}</p>}
-        <div className="modal-actions">
-          <button type="submit" className="btn primary" disabled={busy}>
-            {needTotp ? "Verify" : "Sign in"}
-          </button>
-        </div>
+        <Card className="gap-4 p-5">
+          <Card.Header>
+            <Card.Title>Sign in</Card.Title>
+          </Card.Header>
+          <Card.Content className="flex flex-col gap-4">
+            <TextField fullWidth type="password" autoComplete="current-password" value={password} onChange={setPassword} isDisabled={busy || needTotp} isRequired autoFocus>
+              <Label>Password or Admin Token</Label>
+              <Input className="min-h-11" />
+            </TextField>
+            {needTotp && (
+              <TextField
+                fullWidth
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="\d{6}"
+                maxLength={6}
+                value={totp}
+                onChange={(v) => setTotp(v.replace(/\D/g, ""))}
+                isDisabled={busy}
+                isRequired
+                autoFocus
+              >
+                <Label>Authenticator code</Label>
+                <Input className="min-h-11" />
+              </TextField>
+            )}
+            {error && <ErrorAlert>{error}</ErrorAlert>}
+          </Card.Content>
+          <Card.Footer>
+            <Button type="submit" variant="primary" fullWidth className="min-h-11" isPending={busy}>
+              {needTotp ? "Verify" : "Sign in"}
+            </Button>
+          </Card.Footer>
+        </Card>
       </form>
-    </main>
+    </AuthShell>
   );
 }
 
 export function SetupRequired({ onRetry }: { onRetry: () => void }) {
   return (
-    <main className="shell auth-shell">
-      <h1 className="brand-title">sqlitend</h1>
-      <section className="panel auth-panel">
-        <h2 className="panel-title">Set an admin password</h2>
-        <p>The dashboard is locked until an admin password is set. On the server, run:</p>
-        <pre className="code-block">sqlitend set-password</pre>
-        <p className="hint">
-          Optional second factor: <code>sqlitend enable-totp</code>. Passwords are set only from the server, so
-          nobody who can merely reach this page can claim it.
-        </p>
-        <div className="modal-actions">
-          <button type="button" className="btn primary" onClick={onRetry}>
+    <AuthShell>
+      <Card className="w-full gap-4 p-5">
+        <Card.Header>
+          <Card.Title>Set an admin password</Card.Title>
+        </Card.Header>
+        <Card.Content className="flex flex-col gap-3 text-sm">
+          <p className="m-0">The dashboard is locked until an admin password is set. On the server, run:</p>
+          <pre className="m-0 overflow-x-auto rounded-lg bg-default p-3 font-mono text-xs">sqlitend set-password</pre>
+          <p className="m-0 text-muted">
+            Optional second factor: <code>sqlitend enable-totp</code>. Passwords are set only from the server, so
+            nobody who can merely reach this page can claim it.
+          </p>
+        </Card.Content>
+        <Card.Footer>
+          <Button variant="primary" fullWidth className="min-h-11" onPress={onRetry}>
             I've set it
-          </button>
-        </div>
-      </section>
+          </Button>
+        </Card.Footer>
+      </Card>
+    </AuthShell>
+  );
+}
+
+/** Centered, phone-first column shared by every pre-login screen. */
+export function AuthShell({ children }: { children: ReactNode }) {
+  return (
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center gap-6 bg-background px-4 py-8 text-foreground">
+      <h1 className="text-2xl font-semibold tracking-tight">sqlitend</h1>
+      {children}
     </main>
   );
 }
